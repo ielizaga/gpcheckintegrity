@@ -22,11 +22,11 @@ EXECNAME = os.path.split(__file__)[-1]
 def parseargs():
 
     parser = OptParser(option_class=OptChecker)
-    parser.add_option('--division', type='string')
     parser.remove_option('-h')
     parser.add_option('-h', '-?', '--help', action='help')
     parser.add_option('--verbose', action='store_true')
     parser.add_option('--debug', action='store_true')
+    parser.add_option('-d','--database', type='string')
     (options, args) = parser.parse_args()
 
     USER=os.getenv('USER')
@@ -34,17 +34,20 @@ def parseargs():
         logger.error('USER environment variable must be set.')
         parser.exit()
 
-    if options.division:
-	logger.info("Integrity check")
-    else:
-        logger.error("No action specified.  See the --help info.")
-        parser.exit()
+    if options.database is None:
+        options.database = os.environ.get('PGDATABASE', 'template1')
 
     return options
 
-class IntegrityQuery:
+class integrity_query:
+
+    def __init__(self,schema,name):
+        self.query = "COPY %s.%s TO '/dev/null'" % (schema,name)
+
+class tables_query:
+    
     def __init__(self):
-        self.query = "select version()"
+	    self.query = "SELECT n.nspname, c.relname from pg_class c join pg_namespace n on c.relnamespace = n.oid where c.relkind = 'r' and relstorage != 'x' and n.nspname != 'pg_catalog' and c.relhassubclass='f'"
 
 def userConfirm():
     if not ask_yesno('', "Are you sure you want to ignore unreachable hosts?",'N'):                            
@@ -65,6 +68,11 @@ logger = get_default_logger()
 setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
 
 options = parseargs()
+logger.info("Checking integrity of database %s" % options.database)
+if not ask_yesno('', "Are you sure you want to check integrity of database %s?" % options.database,'N'):                            
+    logger.info("User Aborted. Exiting...")
+    sys.exit(0)
+
 
 if options.debug:
     enable_verbose_logging()
@@ -90,22 +98,25 @@ if len(failedPings):
     userConfirm()
 
 try:
+    # get table list
+    dburl = dbconn.DbURL(dbname=options.database)
+    conn = dbconn.connect(dburl, True)
+    tables = dbconn.execSQL(conn,tables_query().query)
+    conn.close()
+
     # do the segments
     for h in hostCache.get_hosts():
         directory_string = None
 
         for seg in h.dbs:
-	    if seg.isSegmentPrimary():
-		dburl = dbconn.DbURL(hostname=h.hostname,port=seg.port)
-   		
-		conn = dbconn.connect(dburl, True)
-          	
-		rows = dbconn.execSQL(conn,IntegrityQuery().query)
+	        if seg.isSegmentPrimary():
+		        dburl = dbconn.DbURL(dbname=options.database,hostname=h.hostname,port=seg.port)
+                conn = dbconn.connect(dburl, True)
+                for table in tables:
+                    logger.debug("Performing copy to /dev/null of %s.%s" % (table[0],table[1]))
+                    rows = dbconn.execSQL(conn,integrity_query(table[0],table[1]).query)
+                conn.close()
 
-		for row in rows:
-			logger.info(row)
-
-		conn.close()
 
     # do the master
     # if options.mastervalue or options.remove:
