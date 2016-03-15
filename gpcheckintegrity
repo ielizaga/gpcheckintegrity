@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+
+import os, sys, re
+
+try:
+    from optparse import Option, OptionParser 
+    from gppylib.gpparseopts import OptParser, OptChecker
+    from gppylib.gparray import GpArray
+    from gppylib.gphostcache import *
+    from gppylib.gplog import *
+    from gppylib.commands.unix import *
+    from gppylib.commands.gp import *
+    from gppylib.db import dbconn
+    from gppylib.userinput import *
+    from pygresql.pg import DatabaseError
+    from gppylib.gpcoverage import GpCoverage
+except ImportError, e:    
+    sys.exit('Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
+
+EXECNAME = os.path.split(__file__)[-1]
+
+def parseargs():
+
+    parser = OptParser(option_class=OptChecker)
+    parser.add_option('--division', type='string')
+    parser.remove_option('-h')
+    parser.add_option('-h', '-?', '--help', action='help')
+    parser.add_option('--verbose', action='store_true')
+    parser.add_option('--debug', action='store_true')
+    (options, args) = parser.parse_args()
+
+    USER=os.getenv('USER')
+    if USER is None or USER is ' ':
+        logger.error('USER environment variable must be set.')
+        parser.exit()
+
+    if options.division:
+	logger.info("Integrity check")
+    else:
+        logger.error("No action specified.  See the --help info.")
+        parser.exit()
+
+    return options
+
+class IntegrityQuery:
+    def __init__(self):
+        self.query = "select version()"
+
+def userConfirm():
+    if not ask_yesno('', "Are you sure you want to ignore unreachable hosts?",'N'):                            
+        logger.info("User Aborted. Exiting...")
+        sys.exit(0)
+
+def verbosePrint(options, normalized_hostname, hostname, directory):
+    if options.verbose:
+        msg = "normalized_host=%s host=%s dir=%s" % (normalized_hostname, hostname, directory)
+        logger.info(msg)
+
+#------------------------------- Mainline --------------------------------
+
+coverage = GpCoverage()
+coverage.start()
+
+logger = get_default_logger()
+setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
+
+options = parseargs()
+
+if options.debug:
+    enable_verbose_logging()
+
+try:
+    dburl = dbconn.DbURL()
+
+    gparray = GpArray.initFromCatalog(dburl,utility=True)
+   
+except DatabaseError, ex:
+    logger.error(ex.__str__())
+    logger.error('Failed to connect to database, exiting without action. This script can only be run when the database is up.')
+    sys.exit(1)
+
+pool = WorkerPool()
+
+hostCache = GpHostCache(gparray, pool)
+failedPings = hostCache.ping_hosts(pool)
+
+if len(failedPings):
+    for i in failedPings:
+        logger.warning('unreachable host: ' + i.hostname)
+    userConfirm()
+
+try:
+    # do the segments
+    for h in hostCache.get_hosts():
+        directory_string = None
+
+        for seg in h.dbs:
+	    if seg.isSegmentPrimary():
+		dburl = dbconn.DbURL(hostname=h.hostname,port=seg.port)
+   		
+		conn = dbconn.connect(dburl, True)
+          	
+		rows = dbconn.execSQL(conn,IntegrityQuery().query)
+
+		for row in rows:
+			logger.info(row)
+
+		conn.close()
+
+    # do the master
+    # if options.mastervalue or options.remove:
+    #    verbosePrint(options, gparray.master.hostname, gparray.master.hostname, gparray.master.datadir)
+    #    cmd = GpAddConfigScript("master", gparray.master.datadir, options.entry, options.mastervalue, options.remove, ctxt=REMOTE, remoteHost=gparray.master.hostname)
+    #    pool.addCommand(cmd)
+
+    pool.join()
+    items = pool.getCompletedItems()
+    failure = False
+    for i in items:
+        if not i.was_successful():
+            # TODO: When does the query fail and when does the connection fail
+            logger.error('failed checking integrity on host: ' + i.remoteHost)
+            failure = True
+        
+    pool.check_results()
+except Exception, e:
+    logger.error('errors in job:')
+    logger.error(e.__str__())
+    logger.error('exiting early')
+
+pool.haltWork()
+pool.joinWorkers()
+
+if failure:
+    logger.error('finished with errors')
+else:
+    logger.info("completed successfully")
+
+coverage.stop()
+coverage.generate_report()
