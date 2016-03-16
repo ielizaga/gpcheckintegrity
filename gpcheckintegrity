@@ -53,10 +53,37 @@ def userConfirm():
         logger.info("User Aborted. Exiting...")
         sys.exit(0)
 
-def verbosePrint(options, normalized_hostname, hostname, directory):
-    if options.verbose:
-        msg = "normalized_host=%s host=%s dir=%s" % (normalized_hostname, hostname, directory)
-        logger.info(msg)
+class execThread(Thread):
+    '''
+    "cfg" is the segment configuration information. It must be an object with at least hostname, port, content and current role
+    "tables" is a list of the table names (with schema) to check integrity
+    '''
+    def __init__(self, cfg, tables, database):
+        self.cfg = cfg
+        self.tables = tables
+        self.database = database
+        self.curs = None
+        self.error = None
+        Thread.__init__(self)
+
+        def run(self):
+            try:
+                logger.info('Checking table integrity in seg%s (%s:%s)' % (seg.content,seg.hostname,seg.port))
+                self.dburl = dbconn.DbURL(dbname=self.database,hostname=self.cfg.hostname,port=self.cfg.port)
+                conn = dbconn.connect(self.dburl, True)
+                for table in self.tables:
+                    try:
+                        logger.debug("[seg%s] Integrity check for table %s.%s" % (seg.content,table[0],table[1]))
+                        rows = dbconn.execSQL(conn,integrity_query(table[0],table[1]).query)
+                    except DatabaseError, e:
+                        logger.error('Integrity check FAILED for table %s.%s at seg%s (%s:%s)' % (table[0],table[1],seg.content,seg.hostname,seg.port))
+                        #TODO: pygresql wraps all queries in the same cursor under the same transaction. If one query fail, transaction is aborted.
+                        conn.close()
+                        conn = dbconn.connect(dburl,True)
+                conn.close()
+                self.curs = self.db.query(self.qry)
+            except BaseException, e:
+                self.error = e
 
 #------------------------------- Mainline --------------------------------
 
@@ -105,7 +132,6 @@ try:
 
     # do the segments
     for h in hostCache.get_hosts():
-        directory_string = None
 
         for seg in h.dbs:
             if seg.isSegmentPrimary():
@@ -122,7 +148,6 @@ try:
                         conn.close()
                         conn = dbconn.connect(dburl,True)
                 conn.close()
-
 
     # do the master
     # if options.mastervalue or options.remove:
