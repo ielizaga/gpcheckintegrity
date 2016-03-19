@@ -1,29 +1,28 @@
 #!/usr/bin/env python
 
-import os, sys, subprocess, re, time
-from threading import Thread
+import os, sys, re
+
 try:
+    from optparse import Option, OptionParser
     from gppylib.gpparseopts import OptParser, OptChecker
+    from gppylib.gparray import GpArray
+    from gppylib.gphostcache import *
     from gppylib.gplog import *
+    from gppylib.commands.unix import *
     from gppylib.commands.gp import *
     from gppylib.db import dbconn
     from gppylib.userinput import *
-    from pygresql import pg
-
+    from pygresql.pg import DatabaseError
     from gppylib.gpcoverage import GpCoverage
 except ImportError, e:
     sys.exit('Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
 
 EXECNAME = os.path.split(__file__)[-1]
 
-'''
-Parse command-line arguments using gpparseopts
-'''
-def parse_args():
+def parseargs():
 
     parser = OptParser(option_class=OptChecker)
     parser.remove_option('-h')
-    parser.add_option('-u', '--user')
     parser.add_option('-h', '-?', '--help', action='help')
     parser.add_option('-v','--verbose', action='store_true')
     parser.add_option('--debug', action='store_true')
@@ -40,47 +39,6 @@ def parse_args():
 
     return options
 
-'''
-Connect to database method using environment values by default
-'''
-def connect(user=None, password=None, host=None, port=None, 
-            database=None, utilityMode=False):
-    '''Connect to DB using parameters in GV'''
-    options = utilityMode and '-c gp_session_role=utility' or None
-    if not user: user = os.environ.get('PGUSER')
-    if not user: user = os.environ.get('USER')
-    if not password: password = os.environ.get('PGPASSWORD')
-    if not host: host = 'localhost'
-    if not port: port = os.environ.get('PGPORT',5432)
-    if not database: database = os.environ.get('PGDATABASE', 'postgres')
-    try:
-        logger.debug('connecting to %s:%s %s' % (host, port, database))
-        db = pg.connect(host=host, port=port, user=user,
-                        passwd=password, dbname=database, opt=options)
-    except pg.InternalError, ex:
-        logger.fatal('could not connect to %s: "%s"' % 
-            (database, str(ex).strip()))
-        exit(1)
-    
-    logger.debug('connected with %s:%s %s' % (host, port, database))     
-    return db
-
-'''
-Retrieve Greenplum database version
-'''
-def getversion():
-    db = connect()
-    curs = db.query('''
-    select regexp_replace(version(), 
-       E'.*PostgreSQL [^ ]+ .Greenplum Database ([1-9]+.[0-9]((.[0-9])?(.[0-9])?)+|main).*', 
-       E'\\\\1') as ver;''')
-
-    row = curs.getresult()[0]
-    version = row[0]
-
-    logger.info('Greenplum database version %s' % version)
-    return version
-
 class integrity_query:
 
     def __init__(self,schema,name):
@@ -95,70 +53,131 @@ def userConfirm():
         logger.info("User Aborted. Exiting...")
         sys.exit(0)
 
-
-class MyThread(Thread):
-    def __init__(self, val):
-        ''' Constructor. '''
- 
+class execThread(Thread):
+    '''
+    "cfg" is the segment configuration information. It must be an object with at least hostname, port, content and current role
+    "tables" is a list of the table names (with schema) to check integrity
+    '''
+    def __init__(self, cfg, tables, database):
+        self.cfg = cfg
+        self.tables = tables
+        self.database = database
+        self.curs = None
+        self.error = None
         Thread.__init__(self)
-        self.val = val
- 
- 
-    def run(self):
-        for i in range(1, self.val):
-            print('Value %d in thread %s' % (i, self.getName()))
- 
-            # Sleep for random time between 1 ~ 3 second
-            secondsToSleep = 1
-            print('%s sleeping fo %s seconds...' % (self.getName(), secondsToSleep))
-            time.sleep(secondsToSleep)
 
-#############
+        def run(self):
+            try:
+                logger.info('Checking table integrity in seg%s (%s:%s)' % (seg.content,seg.hostname,seg.port))
+                self.dburl = dbconn.DbURL(dbname=self.database,hostname=self.cfg.hostname,port=self.cfg.port)
+                conn = dbconn.connect(self.dburl, True)
+                for table in self.tables:
+                    try:
+                        logger.debug("[seg%s] Integrity check for table %s.%s" % (seg.content,table[0],table[1]))
+                        rows = dbconn.execSQL(conn,integrity_query(table[0],table[1]).query)
+                    except DatabaseError, e:
+                        logger.error('Integrity check FAILED for table %s.%s at seg%s (%s:%s)' % (table[0],table[1],seg.content,seg.hostname,seg.port))
+                        #TODO: pygresql wraps all queries in the same cursor under the same transaction. If one query fail, transaction is aborted.
+                        conn.close()
+                        conn = dbconn.connect(dburl,True)
+                conn.close()
+                self.curs = self.db.query(self.qry)
+            except BaseException, e:
+                self.error = e
 
-if __name__ == '__main__':
+#------------------------------- Mainline --------------------------------
 
-    coverage = GpCoverage()
-    coverage.start()
+coverage = GpCoverage()
+coverage.start()
 
-    logger = get_default_logger()
-    setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
+logger = get_default_logger()
+setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
 
-    options = parse_args()
-    version = getversion()
-    logger.info("Checking integrity of database %s" % options.database)
-    if not ask_yesno('', "Are you sure you want to check integrity of database %s?" % options.database,'N'):
-        logger.info("User Aborted. Exiting...")
-        sys.exit(0)
+options = parseargs()
+logger.info("Checking integrity of database %s" % options.database)
+if not ask_yesno('', "Are you sure you want to check integrity of database %s?" % options.database,'N'):
+    logger.info("User Aborted. Exiting...")
+    sys.exit(0)
 
 
-    if options.verbose:
-        enable_verbose_logging()
+if options.verbose:
+    enable_verbose_logging()
 
-    try:
-        
+try:
+    dburl = dbconn.DbURL()
 
-        myThreadOb1 = MyThread(4)
-        myThreadOb1.setName('Thread 1')
-     
-        myThreadOb2 = MyThread(4)
-        myThreadOb2.setName('Thread 2')
+    gparray = GpArray.initFromCatalog(dburl,utility=True)
 
-        # Start running the threads!
-        myThreadOb1.start()
-        myThreadOb2.start()
+except DatabaseError, ex:
+    logger.error(ex.__str__())
+    logger.error('Failed to connect to database, exiting without action. This script can only be run when the database is up.')
+    sys.exit(1)
 
-        # Wait for the threads to finish...
-        myThreadOb1.join()
-        myThreadOb2.join()
-     
-        print('Main Terminating...')
+pool = WorkerPool()
 
-    except Exception, e:
-        logger.error('errors in job:')
-        logger.error(e.__str__())
-        logger.error('exiting early')
-    
+hostCache = GpHostCache(gparray, pool)
+failedPings = hostCache.ping_hosts(pool)
+
+if len(failedPings):
+    for i in failedPings:
+        logger.warning('unreachable host: ' + i.hostname)
+    userConfirm()
+
+try:
+    # get table list
+    dburl = dbconn.DbURL(dbname=options.database)
+    conn = dbconn.connect(dburl, True)
+    tables = list(dbconn.execSQL(conn,tables_query().query))
+    conn.close()
+
+    # do the segments
+    for h in hostCache.get_hosts():
+
+        for seg in h.dbs:
+            if seg.isSegmentPrimary():
+                logger.info('Checking table integrity in seg%s (%s:%s)' % (seg.content,seg.hostname,seg.port))
+                dburl = dbconn.DbURL(dbname=options.database,hostname=h.hostname,port=seg.port)
+                conn = dbconn.connect(dburl, True)
+                for table in tables:
+                    try:
+                        logger.debug("[seg%s] Integrity check for table %s.%s" % (seg.content,table[0],table[1]))
+                        rows = dbconn.execSQL(conn,integrity_query(table[0],table[1]).query)
+                    except DatabaseError, e:
+                        logger.error('Integrity check FAILED for table %s.%s at seg%s (%s:%s)' % (table[0],table[1],seg.content,seg.hostname,seg.port))
+                        #TODO: pygresql wraps all queries in the same cursor under the same transaction. If one query fail, transaction is aborted.
+                        conn.close()
+                        conn = dbconn.connect(dburl,True)
+                conn.close()
+
+    # do the master
+    # if options.mastervalue or options.remove:
+    #    verbosePrint(options, gparray.master.hostname, gparray.master.hostname, gparray.master.datadir)
+    #    cmd = GpAddConfigScript("master", gparray.master.datadir, options.entry, options.mastervalue, options.remove, ctxt=REMOTE, remoteHost=gparray.master.hostname)
+    #    pool.addCommand(cmd)
+
+    pool.join()
+    items = pool.getCompletedItems()
+    failure = False
+    for i in items:
+        if not i.was_successful():
+            # TODO: When does the query fail and when does the connection fail
+            logger.error('failed checking integrity on host: ' + i.remoteHost)
+            failure = True
+
+    pool.check_results()
+#TODO: Better exception handling
+except Exception, e:
+    logger.error('errors in job:')
+    logger.error(e.__str__())
+    logger.error('exiting early')
+
+pool.haltWork()
+pool.joinWorkers()
+
+if failure:
+    logger.error('finished with errors')
+else:
     logger.info("completed successfully")
 
-    coverage.stop()
-    coverage.generate_report()
+coverage.stop()
+coverage.generate_report()
