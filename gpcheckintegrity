@@ -17,6 +17,10 @@ try:
     from gppylib.userinput import *
     from pygresql.pg import DatabaseError
     from gppylib.gpcoverage import GpCoverage
+
+    from pygresql.pgdb import DatabaseError
+    from pygresql import pg
+
 except ImportError, e:
     sys.exit('Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
 
@@ -41,6 +45,67 @@ def parseargs():
         options.database = os.environ.get('PGDATABASE', 'template1')
 
     return options
+
+'''
+Default connect method to the database
+'''
+def connect(user=None, password=None, host=None, port=None,
+            database=None, utilityMode=False):
+
+    options = utilityMode and '-c gp_session_role=utility' or None
+    if not user: user = os.environ.get('PGUSER')
+    if not user: user = os.environ.get('USER')
+    if not password: password = os.environ.get('PGPASSWORD')
+    if not host: host = 'localhost'
+    if not port: port = os.environ.get('PGPORT',5432)
+    if not database: database = os.environ.get('PGDATABASE', 'template1')
+    try:
+        logger.debug('connecting to %s:%s %s' % (host, port, database))
+        db = pg.connect(host=host, port=port, user=user,
+                        passwd=password, dbname=database, opt=options)
+    except pg.InternalError, ex:
+        logger.fatal('could not connect to %s: "%s"' %
+            (database, str(ex).strip()))
+        exit(1)
+
+    logger.debug('connected with %s:%s %s' % (host, port, database))
+    return db
+
+def get_gp_segment_configuration():
+    cfg = {}
+    db = connect()
+
+    qry = '''
+          SELECT content, preferred_role = 'p' as definedprimary,
+                 dbid, role = 'p' as isprimary, hostname, address, port,
+                 fselocation as datadir
+            FROM gp_segment_configuration JOIN pg_filespace_entry on (dbid = fsedbid)
+           WHERE fsefsoid = (select oid from pg_filespace where fsname='pg_system')
+             AND (role = 'p' or content < 0 )
+          '''
+    curs = db.query(qry)
+    for row in curs.dictresult():
+        if row['content'] == -1:
+            continue    # skip master
+        cfg[row['dbid']] = row
+    db.close()
+    return cfg
+
+def get_tables():
+    db = connect()
+    table_list = []
+
+    # Retrieve all non-catalog/non partitioned parent tables
+    qry = '''
+          SELECT n.nspname as schema, c.relname as table
+            FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
+           WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname != 'pg_catalog') and (c.relhassubclass='f')
+          '''
+    curs = db.query(qry)
+    for row in curs.dictresult():
+        table_list.append(row)
+    db.close()
+    return table_list
 
 class integrity_query:
 
@@ -68,21 +133,17 @@ class Check_Integrity(Thread):
     def run(self):
         for table in self.tables:
             try:
-                logger.info("[seg%s] Checking table %s.%s" % (self.content,table[0],table[1]))
+                logger.info("[seg%s] Checking table %s.%s" % (self.content,table['schema'],table['table']))
                 my_conn = dbconn.DbURL(dbname=self.database,hostname=self.hostname,port=self.port)
                 my2_conn = dbconn.connect(my_conn, True)
-                dbconn.execSQL(my2_conn,integrity_query(table[0],table[1]).query)
+                dbconn.execSQL(my2_conn,integrity_query(table['schema'],table['table']).query)
 
             except DatabaseError:
-                    logger.error('Failed for table %s.%s at seg%s' % (table[0],table[1],self.content))
+                    logger.error('Failed for table %s.%s at seg%s' % (table['schema'],table['table'],self.content))
                     #TODO: pygresql wraps all queries in the same cursor under the same transaction. If one query fail, transaction is aborted.
                     my2_conn.close()
                     my2_conn = dbconn.connect(dburl,True)
             my2_conn.close()
-
-
-
-
 
 #------------------------------- Mainline --------------------------------
 
@@ -94,73 +155,73 @@ setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
 
 options = parseargs()
 logger.info("Checking integrity of database %s" % options.database)
-if not ask_yesno('', "Are you sure you want to check integrity of database %s?" % options.database,'N'):
-    logger.info("User Aborted. Exiting...")
-    sys.exit(0)
 
+#if not ask_yesno('', "Are you sure you want to check integrity of database %s?" % options.database,'N'):
+#    logger.info("User Aborted. Exiting...")
+#    sys.exit(0)
 
 if options.verbose:
     enable_verbose_logging()
 
+#try:
+#    dburl = dbconn.DbURL()
+#    gparray = GpArray.initFromCatalog(dburl,utility=True)
+#
+#except DatabaseError, ex:
+#    logger.error(ex.__str__())
+#    logger.error('Failed to connect to database, exiting without action. This script can only be run when the database is up.')
+#    sys.exit(1)
+
+#pool = WorkerPool()
+#hostCache = GpHostCache(gparray, pool)
+#failedPings = hostCache.ping_hosts(pool)
+
+#if len(failedPings):
+#    for i in failedPings:
+#        logger.warning('unreachable host: ' + i.hostname)
+#    userConfirm()
+
 try:
-    dburl = dbconn.DbURL()
-    gparray = GpArray.initFromCatalog(dburl,utility=True)
-
-except DatabaseError, ex:
-    logger.error(ex.__str__())
-    logger.error('Failed to connect to database, exiting without action. This script can only be run when the database is up.')
-    sys.exit(1)
-
-pool = WorkerPool()
-hostCache = GpHostCache(gparray, pool)
-failedPings = hostCache.ping_hosts(pool)
-
-if len(failedPings):
-    for i in failedPings:
-        logger.warning('unreachable host: ' + i.hostname)
-    userConfirm()
-
-try:
-    # get table list
-    dburl = dbconn.DbURL(dbname=options.database)
-    conn = dbconn.connect(dburl, True)
-    tables = list(dbconn.execSQL(conn,tables_query().query))
-    conn.close()
-
+    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+    tables = get_tables()   # get table list
     threads= []
 
+    for dbid in dbids:
+        if dbids[dbid]['isprimary'] == 't':
+            th = Check_Integrity(tables,dbids[dbid]['hostname'],options.database,dbids[dbid]['content'],dbids[dbid]['port'])
+            th.start()
+            threads.append(th)
     # do the segments
-    for h in hostCache.get_hosts():
-        for seg in h.dbs:
+#    for h in hostCache.get_hosts():
+#        for seg in h.dbs:
             #TODO: Only checks preferred role
-            if seg.isSegmentPrimary():
-                th = Check_Integrity(tables,seg.hostname,options.database,seg.content,seg.port)
-                th.start()
-                threads.append(th)
+#            if seg.isSegmentPrimary():
+#                th = Check_Integrity(tables,seg.hostname,options.database,seg.content,seg.port)
+#                th.start()
+#                threads.append(th)
 
     for thread in threads:
         logger.debug('waiting on thread %s' % thread.getName())
         thread.join()
-        logger.debug('thread ok')
 
-    pool.join()
-    items = pool.getCompletedItems()
-    failure = False
-    for i in items:
-        if not i.was_successful():
-            # TODO: When does the query fail and when does the connection fail
-            logger.error('failed checking integrity on host: ' + i.remoteHost)
-            failure = True
+#    pool.join()
+#    items = pool.getCompletedItems()
+#    failure = False
+#    for i in items:
+#        if not i.was_successful():
+#            # TODO: When does the query fail and when does the connection fail
+#            logger.error('failed checking integrity on host: ' + i.remoteHost)
+#            failure = True
 
-    pool.check_results()
+#    pool.check_results()
 #TODO: Better exception handling
 except Exception, e:
     logger.error('errors in job:')
     logger.error(e.__str__())
     logger.error('exiting early')
 
-pool.haltWork()
-pool.joinWorkers()
+#pool.haltWork()
+#pool.joinWorkers()
 
 
 logger.info("completed successfully")
