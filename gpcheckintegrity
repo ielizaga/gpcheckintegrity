@@ -141,8 +141,8 @@ class CheckIntegrity(Thread):
                 logger.error('Failed for table %s.%s at seg%s' % (table['schema'], table['table'], self.content))
                 logger.error('ERROR:%s' % str(de).strip())
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
-                db = connect(database=self.database, host=self.hostname, port=self.port)
                 db.close()
+                db = connect(database=self.database, host=self.hostname, port=self.port)
         db.close()
 
 
