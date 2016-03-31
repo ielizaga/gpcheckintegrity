@@ -142,7 +142,7 @@ class CheckIntegrity(Thread):
                 logger.error('ERROR:%s' % str(de).strip())
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db.close()
-                db = connect(database=self.database, host=self.hostname, port=self.port)
+                db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
         db.close()
 
 
