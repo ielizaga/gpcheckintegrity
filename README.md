@@ -15,7 +15,7 @@ COPY example_table TO '/dev/null'
 - [x] Check table integrity in one database secuentially
 - [ ] Check table integrity in multiple databases
 - [x] Check table integrity in one database in parallel
-- [ ] Check table integrity in just one schema
+- [x] Check table integrity in just one schema
 - [ ] Check integrity in just one table
 - [ ] Detailed report of the exam
 - [ ] Specify number of threads spawned in the cluster in parallel
