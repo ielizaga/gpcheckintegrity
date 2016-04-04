@@ -35,6 +35,7 @@ def parseargs():
     parser.remove_option('-h')
     parser.add_option('-h', '-?', '--help', action='help')
     parser.add_option('-v', '--verbose', action='store_true')
+    parser.add_option('-s', '--schema', type='string')
     # TODO: perform check just for one/multiple schemas
     # TODO: perform check for multiple databases
     parser.add_option('-d', '--database', type='string')
@@ -117,6 +118,38 @@ def get_tables(database=None):
     return table_list
 
 
+def get_tables_in_schema(database, schema):
+    """
+    This function returns a list of tables within :param schema:. If the schema is pg_catalog, it returns None and
+    logs an error.
+    :param database: name of the database
+    :param schema: schema to fetch table names from
+    :return: list of tables or None if :param schema: is 'pg_catalog'
+    :raise ValueError: if schema is 'pg_catalog'
+    """
+    db = connect(database=database)
+    table_list = []
+
+    if schema == "pg_catalog":
+        logger.error("This check is ineffective on catalog tables. Use gpcheckcat to check catalog integrity")
+        raise ValueError("Schema is pg_catalog")
+
+    # Retrieve all non-catalog/non partitioned parent tables
+    qry = '''
+          SELECT n.nspname as schema, c.relname as table
+            FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
+           WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname = '%s') and (c.relhassubclass='f')
+          ''' % pg.escape_string(schema)
+    curs = db.query(qry)
+
+    for row in curs.dictresult():
+        table_list.append(row)
+
+    db.close()
+
+    return table_list
+
+
 class CheckIntegrity(Thread):
     def __init__(self, tables, hostname, database, content, port):
         Thread.__init__(self)
@@ -160,7 +193,15 @@ if __name__ == '__main__':
     try:
         # TODO: List number of databases/schemas/tables to be checked and prompt to continue
         dbids = get_gp_segment_configuration()  # get Greenplum segment information
-        tables = get_tables(database=options.database)  # get table list
+
+        tables = list()
+
+        if options.schema:
+            tables = get_tables_in_schema(options.database, options.schema)
+            logger.info("Checking only tables in schema %s" % options.schema)
+        else:
+            tables = get_tables(database=options.database)  # get table list
+
         threads = []
 
         for dbid in dbids:
