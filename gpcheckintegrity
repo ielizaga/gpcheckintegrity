@@ -29,11 +29,80 @@ logger = get_default_logger()
 ##############
 
 
+def print_help(option, opt, value, parser):
+    # This function signature is mandatory as this is a callback for OptionParse
+    # even if we only use :param parser:
+    print("""
+COMMAND NAME: gpcheckintegrity
+
+*****************************************************
+SYNOPSIS
+*****************************************************
+
+gpcheckintegrity [-v | --verbose] [-s | --schema <schema_name> ] -d | --database <database>
+
+gpcheckintegrity -h | -? | --help
+
+*****************************************************
+DESCRIPTION
+*****************************************************
+
+Utility for Greenplum Database that performs a table integrity exam to verify that all the
+tables in a specific database can be queried.
+
+***********************************
+OPTIONS
+***********************************
+
+-v | --verbose
+
+    Enables extra debug output. Only useful for debugging the tool itself.
+
+-s | --schema <schema_name>
+
+    Schema name to fetch the tables from. If this option is set, gpcheckintegrity
+    will limit the integrity check to the tables located in this schema
+
+-d | --database <database>
+
+    Name of the database to check. This option is mandatory
+
+-h | -? | --help
+
+    Prints this help page
+
+*****************************************************
+EXAMPLES
+*****************************************************
+
+Check the integrity of all the tables in the database 'sales':
+
+gpcheckintegrity -d sales
+
+
+Check the integrity of all the tables in 'division_1' from DB 'sales':
+
+gpcheckintegrity -s division_1 -d sales
+
+
+Display this message again:
+
+gpcheckintegrity -h
+
+*****************************************************
+BUGS
+*****************************************************
+
+Please report any bugs in https://github.com/ielizaga/gpcheckintegrity
+""")
+    parser.exit()
+
+
 def parseargs():
     # TODO: use global class to keep some variables present at all times
     parser = OptParser(option_class=OptChecker)
     parser.remove_option('-h')
-    parser.add_option('-h', '-?', '--help', action='help')
+    parser.add_option('-h', '-?', '--help', action="callback", callback=print_help)
     parser.add_option('-v', '--verbose', action='store_true')
     parser.add_option('-s', '--schema', type='string')
     # TODO: perform check just for one/multiple schemas
