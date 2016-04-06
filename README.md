@@ -12,7 +12,7 @@ COPY example_table TO '/dev/null'
 ```
 
 ## Ongoing work
-- [x] Check table integrity in one database secuentially
+- [x] Check table integrity in one database sequentially
 - [ ] Check table integrity in multiple databases
 - [x] Check table integrity in one database in parallel
 - [x] Check table integrity in just one schema
