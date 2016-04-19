@@ -2,7 +2,7 @@
 
 import os
 import sys
-from threading import Thread
+from threading import Thread, Lock
 
 try:
     from optparse import Option, OptionParser
@@ -18,6 +18,7 @@ try:
     from gppylib.gpcoverage import GpCoverage
     from pygresql.pgdb import DatabaseError
     from pygresql import pg
+    from datetime import datetime
 
 except ImportError, e:
     sys.exit('Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
@@ -242,6 +243,13 @@ class CheckIntegrity(Thread):
                 # TODO: better error summary report
                 logger.error('Failed for table %s.%s at seg%s' % (table['schema'], table['table'], self.content))
                 logger.error('ERROR:%s' % str(de).strip())
+
+                # Append this table name to reported_table list
+                table_lock.acquire()
+                reported_tables.append("%s.%s in %s:%d gpseg%s" % (table['schema'], table['table'],
+                                                                   self.hostname, self.port, self.content))
+                table_lock.release()
+
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db.close()
                 db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
@@ -272,6 +280,8 @@ if __name__ == '__main__':
             tables = get_tables(database=options.database)  # get table list
 
         threads = []
+        reported_tables = []
+        table_lock = Lock()
 
         for dbid in dbids:
             if dbids[dbid]['isprimary'] == 't':
@@ -283,6 +293,15 @@ if __name__ == '__main__':
         for thread in threads:
             logger.debug('waiting on thread %s' % thread.getName())
             thread.join()
+
+        logger.info("REPORT SUMMARY %s" % datetime.now())
+        logger.info("============================================")
+
+        if len(reported_tables) == 0:
+            logger.info("No tables reported inconsistency errors")
+        else:
+            for t in reported_tables:
+                logger.info(t)
 
     # TODO: Better exception handling
     except Exception, e:
