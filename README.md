@@ -10,19 +10,3 @@ This tool will go through each and every table of a specific database and perfor
 ```
 COPY example_table TO '/dev/null'
 ```
-
-## Ongoing work
-- [x] Check table integrity in one database sequentially
-- [ ] Check table integrity in multiple databases
-- [x] Check table integrity in one database in parallel
-- [x] Check table integrity in just one schema
-- [ ] Check integrity in just one table
-- [ ] Detailed report of the exam
-- [ ] Specify number of threads spawned in the cluster in parallel
-- [ ] Help -? functionality
-- [ ] User prompts
-- [ ] Exam progress information
-
-
-
-
