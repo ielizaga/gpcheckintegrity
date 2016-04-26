@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import string
 import sys
 from threading import Thread, Lock
 
@@ -106,7 +107,7 @@ def parseargs():
     parser.add_option('-h', '-?', '--help', action="callback", callback=print_help)
     parser.add_option('-v', '--verbose', action='store_true')
     parser.add_option('-s', '--schema', type='string')
-    # TODO: perform check just for one/multiple schemas
+    parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
     # TODO: perform check for multiple databases
     parser.add_option('-d', '--database', type='string')
     (options, args) = parser.parse_args()
@@ -220,6 +221,20 @@ def get_tables_in_schema(database, schema):
     return table_list
 
 
+def database_schema_exists(database, schema):
+
+    db = connect(database=database)
+    qry = '''
+    select True as exists from pg_namespace a where a.nspname = '%s'
+    ''' % pg.escape_string(schema)
+
+    logger.debug("Running query: %s" % qry)
+
+    curs = db.query(qry)
+
+    return curs.ntuples() == 1
+
+
 class CheckIntegrity(Thread):
     def __init__(self, tables, hostname, database, content, port):
         Thread.__init__(self)
@@ -276,7 +291,16 @@ if __name__ == '__main__':
         if options.schema:
             tables = get_tables_in_schema(options.database, options.schema)
             logger.info("Checking only tables in schema %s" % options.schema)
-        else:
+
+        if options.schema_list and type(options.schema_list) is str:
+            schemas = string.split(options.schema_list, ',')
+            for s in schemas:
+                if database_schema_exists(options.database, s):
+                    tables.extend(get_tables_in_schema(options.database, s))
+                else:
+                    logger.warn("Schema %s not found" % s)
+
+        if options.schema is None and options.schema_list is None:
             tables = get_tables(database=options.database)  # get table list
 
         threads = []
