@@ -37,18 +37,28 @@ def parseargs():
     parser.add_option('-v', '--verbose', action='store_true')
     parser.add_option('-s', '--schema', type='string')
     # TODO: perform check just for one/multiple schemas
-    # TODO: perform check for multiple databases
+    parser.add_option('-A', '--all', action='store_true')
     parser.add_option('-d', '--database', type='string')
     (options, args) = parser.parse_args()
 
     USER = os.getenv('USER')
     if USER is None or USER is ' ':
-        logger.error('USER environment variable must be set.')
+        logger.error('USER environment variable must be set')
         parser.exit()
 
-    if options.database is None:
-        logger.error('Database must be specified.')
+    if options.database is None and options.all is None:
+        logger.error('Database must be specified')
         parser.exit()
+
+    if options.database is not None and options.all is not None:
+        logger.info('Can\'t specify -A and -d options at the same time')
+        parser.exit()
+
+    if options.database is not None:
+        logger.info("Checking integrity of database %s" % options.database)
+
+    if options.all is not None:
+        logger.info("Checking integrity of all databases")
 
     return options
 
@@ -101,6 +111,27 @@ def get_gp_segment_configuration(database=None):
     return cfg
 
 
+def get_databases():
+    """
+    This function returns the list of databases present in the Greenplum cluster.
+    :return: list of databases
+    """
+    db = connect(database='template1')
+    database_list = []
+
+    # Retrieve all non-catalog/non partitioned parent tables
+    qry = '''
+          SELECT datname
+          FROM pg_database
+          where datname not like 'template0'
+          '''
+    curs = db.query(qry)
+    for row in curs.dictresult():
+        database_list.append(row)
+    db.close()
+    return database_list
+
+
 def get_tables(database=None):
     db = connect(database=database)
     table_list = []
@@ -150,6 +181,29 @@ def get_tables_in_schema(database, schema):
     return table_list
 
 
+def spawn_threads(database, schema=None):
+    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+    tables = list()
+
+    if schema is not None:
+        tables = get_tables_in_schema(database, schema)
+        logger.info("Checking only tables in schema %s" % schema)
+    else:
+        tables = get_tables(database=database)  # get table list
+
+    threads = []
+
+    for dbid in dbids:
+        if dbids[dbid]['isprimary'] == 't':
+            th = CheckIntegrity(tables, dbids[dbid]['hostname'], database, dbids[dbid]['content'], dbids[dbid]['port'])
+            th.start()
+            threads.append(th)
+
+    for thread in threads:
+        logger.debug('waiting on thread %s' % thread.getName())
+        thread.join()
+
+
 class CheckIntegrity(Thread):
     def __init__(self, tables, hostname, database, content, port):
         Thread.__init__(self)
@@ -185,35 +239,21 @@ if __name__ == '__main__':
     setup_tool_logging(EXECNAME, getLocalHostname(), getUserName())
 
     options = parseargs()
-    logger.info("Checking integrity of database %s" % options.database)
 
     if options.verbose:
         enable_verbose_logging()
 
     try:
-        # TODO: List number of databases/schemas/tables to be checked and prompt to continue
-        dbids = get_gp_segment_configuration()  # get Greenplum segment information
-
-        tables = list()
-
-        if options.schema:
-            tables = get_tables_in_schema(options.database, options.schema)
-            logger.info("Checking only tables in schema %s" % options.schema)
+        if options.all is not None:
+            for db in get_databases():
+                # TODO: List number of databases/schemas/tables to be checked and prompt to continue
+                logger.info("Checking database %s" % db['datname'])
+                spawn_threads(db['datname'])
         else:
-            tables = get_tables(database=options.database)  # get table list
-
-        threads = []
-
-        for dbid in dbids:
-            if dbids[dbid]['isprimary'] == 't':
-                th = CheckIntegrity(tables, dbids[dbid]['hostname'], options.database, dbids[dbid]['content'],
-                                     dbids[dbid]['port'])
-                th.start()
-                threads.append(th)
-
-        for thread in threads:
-            logger.debug('waiting on thread %s' % thread.getName())
-            thread.join()
+            if options.schema is not None:
+                spawn_threads(options.database, options.schema)
+            else:
+                spawn_threads(options.database)
 
     # TODO: Better exception handling
     except Exception, e:
