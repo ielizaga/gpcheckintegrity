@@ -11,7 +11,7 @@ corruption in any of the nodes of the cluster and a disk repair utility is ran
 ## How does it work
 This tool will go through each and every table of a specific database and perform a
 PostgreSQL [COPY](http://www.postgresql.org/docs/9.1/static/sql-copy.html) command to
-in all segments to verify the table can be queried in the whole cluster.
+/dev/null in all segments to verify the table can be queried in the whole cluster.
 
 ```
 COPY example_table TO '/dev/null'
