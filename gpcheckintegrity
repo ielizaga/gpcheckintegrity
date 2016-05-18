@@ -25,8 +25,10 @@ except ImportError, e:
 
 ##############
 EXECNAME = os.path.split(__file__)[-1]
-setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
+setup_tool_logging(EXECNAME, getLocalHostname(), getUserName())
 logger = get_default_logger()
+
+
 ##############
 
 
@@ -287,21 +289,24 @@ class CheckIntegrity(Thread):
         db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
         for table in self.tables:
             try:
-                logger.info("[seg%s] Checking table %s.%s" % (self.content, table['schema'], table['table']))
+                logger.info("[seg%s] {%s} Checking table %s.%s" % (
+                    self.content, self.database, table['schema'], table['table']))
                 qry = '''
                       COPY %s.%s
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db.query(qry)
-            except DatabaseError, de:
+            except Exception, de:
                 # TODO: better error summary report
-                logger.error('Failed for table %s.%s at seg%s' % (table['schema'], table['table'], self.content))
-                logger.error('%s' % str(de).strip())
+                logger.error('[seg%s] {%s} Failed for table %s.%s' % (
+                    self.content, self.database, table['schema'], table['table']))
+                logger.debug('[seg%s] {%s} %s' % (self.content, self.database, str(de).strip()))
 
                 # Append this table name to reported_table list
                 table_lock.acquire()
-                reported_tables.append("[%s] %s.%s in %s:%d gpseg%s" % (self.database, table['schema'], table['table'],
-                                                                   self.hostname, self.port, self.content))
+                reported_tables.append(
+                    "[seg%s] {%s} %s.%s in %s:%d" % (self.content, self.database, table['schema'], table['table'],
+                                                     self.hostname, self.port))
                 table_lock.release()
 
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
@@ -351,4 +356,3 @@ if __name__ == '__main__':
         logger.error('exiting early')
 
     logger.info("completed successfully")
-
