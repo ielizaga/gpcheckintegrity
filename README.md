@@ -20,9 +20,18 @@ COPY example_table TO '/dev/null'
 ## Installation
 Simply download the python file `gpcheckintegrity` into your system and run it!
 
+From the v1.0 release:
+
 ```
 $> curl -L -o gpcheckintegrity.tar.gz https://github.com/ielizaga/gpcheckintegrity/releases/download/v1.0/gpcheckintegrity-v1.0.tar.gz
 $> tar xzvpf gpcheckintegrity.tar.gz
+$> ./gpcheckintegrity --help
+```
+
+Or try the latest dev version in the repo:
+
+```
+$> curl -L -o gpcheckintegrity https://raw.githubusercontent.com/ielizaga/gpcheckintegrity/master/gpcheckintegrity
 $> ./gpcheckintegrity --help
 ```
 
