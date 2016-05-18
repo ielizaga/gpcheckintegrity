@@ -3,7 +3,7 @@ Utility for Greenplum Database that performs a table integrity exam to verify th
 the tables in a specific database can be queried.
 
 ## Purpose
-The purpose of this tool is to be able to detect when any of the segments in Greenplum
+The purpose of this tool is to detect when any of the segments in Greenplum
 have a bad copy of a table file(s). This is an issue that can happen when there is disk
 corruption in any of the nodes of the cluster and a disk repair utility is ran
 (i.e. xfs_repair, fsck)
