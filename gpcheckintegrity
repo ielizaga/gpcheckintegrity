@@ -117,7 +117,7 @@ def connect(user=None, password=None, host=None, port=None, database=None, utili
     if not host:
         host = 'localhost'
     if not port:
-        port = os.environ.get('PGPORT', 5432)
+        port = int(os.environ.get('PGPORT', 5432))
     if not database:
         database = os.environ.get('PGDATABASE', 'template1')
     try:
