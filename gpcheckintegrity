@@ -31,75 +31,46 @@ logger = get_default_logger()
 
 ##############
 
-
 def print_help(option, opt, value, parser):
     # This function signature is mandatory as this is a callback for OptionParse
     # even if we only use :param parser:
-    print("""
-COMMAND NAME: gpcheckintegrity
-
-*****************************************************
-SYNOPSIS
-*****************************************************
-
-gpcheckintegrity [-v | --verbose] [-s | --schema <schema_name> ] -d | --database <database>
-
-gpcheckintegrity -h | -? | --help
-
-*****************************************************
-DESCRIPTION
-*****************************************************
-
-Utility for Greenplum Database that performs a table integrity exam to verify that all the
-tables in a specific database can be queried.
-
-***********************************
-OPTIONS
-***********************************
-
--v | --verbose
-
-    Enables extra debug output. Only useful for debugging the tool itself.
-
--s | --schema <schema_name>
-
-    Schema name to fetch the tables from. If this option is set, gpcheckintegrity
-    will limit the integrity check to the tables located in this schema
-
--d | --database <database>
-
-    Name of the database to check. This option is mandatory
-
--h | -? | --help
-
-    Prints this help page
-
-*****************************************************
-EXAMPLES
-*****************************************************
-
-Check the integrity of all the tables in the database 'sales':
-
-gpcheckintegrity -d sales
-
-
-Check the integrity of all the tables in 'division_1' from DB 'sales':
-
-gpcheckintegrity -s division_1 -d sales
-
-
-Display this message again:
-
-gpcheckintegrity -h
-
-*****************************************************
-BUGS
-*****************************************************
-
-Please report any bugs in https://github.com/ielizaga/gpcheckintegrity
-""")
+    print("\nUsage: python gpcheckintegrity \n\n" \
+          "*****************************************************\n" \
+          "SYNOPSIS\n" \
+          "*****************************************************\n\n" \
+          "{0} -v [--verbose] -s [--schema] <schema_name> -d [--database] <database-name> \n" \
+          "{0} -h [-?] [--help] \n\n" \
+          "***************************************************** \n" \
+          "DESCRIPTION \n" \
+          "***************************************************** \n\n" \
+          "Utility for Greenplum Database that performs a table integrity exam to verify that all the " \
+          "tables in a specific database can be queried. \n\n" \
+          "*********************************** \n" \
+          "OPTIONS \n" \
+          "*********************************** \n\n" \
+          "-v, --verbose \t\t\t" \
+          "    Enables extra debug output. Only useful for debugging the tool itself. \n" \
+          "-s, --schema <schema_name> \t" \
+          "    Schema name to fetch the tables from. If this option is set, gpcheckintegrity" \
+          " will limit the integrity check to the tables located in this schema \n" \
+          "-d, --database <database> \t" \
+          "    Name of the database to check. This option is mandatory \n" \
+          "-h, -?, --help \t\t\t" \
+          "    Prints this help page \n\n" \
+          "***************************************************** \n" \
+          "EXAMPLES \n" \
+          "***************************************************** \n\n" \
+          "Check the integrity of all the tables in the database 'sales': \n\n" \
+          "\t {0} -d sales \n\n" \
+          "Check the integrity of all the tables in 'division_1' from DB 'sales': \n\n" \
+          "\t {0} -s division_1 -d sales \n\n" \
+          "Display this message again: \n\n" \
+          "\t {0} -h \n\n" \
+          "***************************************************** \n" \
+          "BUGS \n" \
+          "***************************************************** \n\n" \
+          "Please report any bugs in https://github.com/ielizaga/gpcheckintegrity\n".format(__file__))
     parser.exit()
-
 
 def parseargs():
     # TODO: use global class to keep some variables present at all times
