@@ -263,7 +263,7 @@ class CheckIntegrity(Thread):
                 logger.info("[seg%s] {%s} Checking table %s.%s" % (
                     self.content, self.database, table['schema'], table['table']))
                 qry = '''
-                      COPY %s.%s
+                      COPY "%s"."%s"
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db.query(qry)
