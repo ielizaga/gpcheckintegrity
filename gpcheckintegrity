@@ -26,79 +26,52 @@ except ImportError, e:
 
 ##############
 EXECNAME = os.path.split(__file__)[-1]
-setup_tool_logging(EXECNAME,getLocalHostname(),getUserName())
+setup_tool_logging(EXECNAME, getLocalHostname(), getUserName())
 logger = get_default_logger()
-##############
 
+
+##############
 
 def print_help(option, opt, value, parser):
     # This function signature is mandatory as this is a callback for OptionParse
     # even if we only use :param parser:
-    print("""
-COMMAND NAME: gpcheckintegrity
-
-*****************************************************
-SYNOPSIS
-*****************************************************
-
-gpcheckintegrity [-v | --verbose] [-s | --schema <schema_name> ] -d | --database <database>
-
-gpcheckintegrity -h | -? | --help
-
-*****************************************************
-DESCRIPTION
-*****************************************************
-
-Utility for Greenplum Database that performs a table integrity exam to verify that all the
-tables in a specific database can be queried.
-
-***********************************
-OPTIONS
-***********************************
-
--v | --verbose
-
-    Enables extra debug output. Only useful for debugging the tool itself.
-
--s | --schema <schema_name>
-
-    Schema name to fetch the tables from. If this option is set, gpcheckintegrity
-    will limit the integrity check to the tables located in this schema
-
--d | --database <database>
-
-    Name of the database to check. This option is mandatory
-
--h | -? | --help
-
-    Prints this help page
-
-*****************************************************
-EXAMPLES
-*****************************************************
-
-Check the integrity of all the tables in the database 'sales':
-
-gpcheckintegrity -d sales
-
-
-Check the integrity of all the tables in 'division_1' from DB 'sales':
-
-gpcheckintegrity -s division_1 -d sales
-
-
-Display this message again:
-
-gpcheckintegrity -h
-
-*****************************************************
-BUGS
-*****************************************************
-
-Please report any bugs in https://github.com/ielizaga/gpcheckintegrity
-""")
+    print("\nUsage: python gpcheckintegrity \n\n" \
+          "*****************************************************\n" \
+          "SYNOPSIS\n" \
+          "*****************************************************\n\n" \
+          "{0} -v [--verbose] -s [--schema] <schema_name> -d [--database] <database-name> \n" \
+          "{0} -h [-?] [--help] \n\n" \
+          "***************************************************** \n" \
+          "DESCRIPTION \n" \
+          "***************************************************** \n\n" \
+          "Utility for Greenplum Database that performs a table integrity exam to verify that all the " \
+          "tables in a specific database can be queried. \n\n" \
+          "*********************************** \n" \
+          "OPTIONS \n" \
+          "*********************************** \n\n" \
+          "-v, --verbose \t\t\t" \
+          "    Enables extra debug output. Only useful for debugging the tool itself. \n" \
+          "-s, --schema <schema_name> \t" \
+          "    Schema name to fetch the tables from. If this option is set, gpcheckintegrity" \
+          " will limit the integrity check to the tables located in this schema \n" \
+          "-d, --database <database> \t" \
+          "    Name of the database to check. This option is mandatory \n" \
+          "-h, -?, --help \t\t\t" \
+          "    Prints this help page \n\n" \
+          "***************************************************** \n" \
+          "EXAMPLES \n" \
+          "***************************************************** \n\n" \
+          "Check the integrity of all the tables in the database 'sales': \n\n" \
+          "\t {0} -d sales \n\n" \
+          "Check the integrity of all the tables in 'division_1' from DB 'sales': \n\n" \
+          "\t {0} -s division_1 -d sales \n\n" \
+          "Display this message again: \n\n" \
+          "\t {0} -h \n\n" \
+          "***************************************************** \n" \
+          "BUGS \n" \
+          "***************************************************** \n\n" \
+          "Please report any bugs in https://github.com/ielizaga/gpcheckintegrity\n".format(__file__))
     parser.exit()
-
 
 def parseargs():
     # TODO: use global class to keep some variables present at all times
@@ -108,18 +81,28 @@ def parseargs():
     parser.add_option('-v', '--verbose', action='store_true')
     parser.add_option('-s', '--schema', type='string')
     parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
-    # TODO: perform check for multiple databases
+    parser.add_option('-A', '--all', action='store_true')
     parser.add_option('-d', '--database', type='string')
     (options, args) = parser.parse_args()
 
     USER = os.getenv('USER')
     if USER is None or USER is ' ':
-        logger.error('USER environment variable must be set.')
+        logger.error('USER environment variable must be set')
         parser.exit()
 
-    if options.database is None:
-        logger.error('Database must be specified.')
+    if options.database is None and options.all is None:
+        logger.error('Database must be specified')
         parser.exit()
+
+    if options.database is not None and options.all is not None:
+        logger.info('Can\'t specify -A and -d options at the same time')
+        parser.exit()
+
+    if options.database is not None:
+        logger.info("Checking integrity of database %s" % options.database)
+
+    if options.all is not None:
+        logger.info("Checking integrity of all databases")
 
     return options
 
@@ -135,7 +118,7 @@ def connect(user=None, password=None, host=None, port=None, database=None, utili
     if not host:
         host = 'localhost'
     if not port:
-        port = os.environ.get('PGPORT', 5432)
+        port = int(os.environ.get('PGPORT', 5432))
     if not database:
         database = os.environ.get('PGDATABASE', 'template1')
     try:
@@ -170,6 +153,27 @@ def get_gp_segment_configuration(database=None):
         cfg[row['dbid']] = row
     db.close()
     return cfg
+
+
+def get_databases():
+    """
+    This function returns the list of databases present in the Greenplum cluster.
+    :return: list of databases
+    """
+    db = connect(database='template1')
+    database_list = []
+
+    # Retrieve all non-catalog/non partitioned parent tables
+    qry = '''
+          SELECT datname
+          FROM pg_database
+          where datname not like 'template0'
+          '''
+    curs = db.query(qry)
+    for row in curs.dictresult():
+        database_list.append(row)
+    db.close()
+    return database_list
 
 
 def get_tables(database=None):
@@ -235,6 +239,36 @@ def database_schema_exists(database, schema):
     return curs.ntuples() == 1
 
 
+def spawn_threads(database, schema=None, is_list=False):
+    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+    tables = list()
+
+    if schema is not None and is_list is False:
+        tables = get_tables_in_schema(database, schema)
+        logger.info("Checking only tables in schema %s" % schema)
+    elif schema is not None:
+        schemas = string.split(schema, ',')
+        for s in schemas:
+            if database_schema_exists(database, s):
+                tables.extend(get_tables_in_schema(database, s))
+            else:
+                logger.warn("Schema %s not found" % s)
+    else:
+        tables = get_tables(database=database)  # get table list
+
+    threads = []
+
+    for dbid in dbids:
+        if dbids[dbid]['isprimary'] == 't':
+            th = CheckIntegrity(tables, dbids[dbid]['hostname'], database, dbids[dbid]['content'], dbids[dbid]['port'])
+            th.start()
+            threads.append(th)
+
+    for thread in threads:
+        logger.debug('waiting on thread %s' % thread.getName())
+        thread.join()
+
+
 class CheckIntegrity(Thread):
     def __init__(self, tables, hostname, database, content, port):
         Thread.__init__(self)
@@ -248,21 +282,24 @@ class CheckIntegrity(Thread):
         db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
         for table in self.tables:
             try:
-                logger.info("[seg%s] Checking table %s.%s" % (self.content, table['schema'], table['table']))
+                logger.info("[seg%s] {%s} Checking table %s.%s" % (
+                    self.content, self.database, table['schema'], table['table']))
                 qry = '''
-                      COPY %s.%s
+                      COPY "%s"."%s"
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db.query(qry)
-            except DatabaseError, de:
+            except Exception, de:
                 # TODO: better error summary report
-                logger.error('Failed for table %s.%s at seg%s' % (table['schema'], table['table'], self.content))
-                logger.error('ERROR:%s' % str(de).strip())
+                logger.error('[seg%s] {%s} Failed for table %s.%s' % (
+                    self.content, self.database, table['schema'], table['table']))
+                logger.debug('[seg%s] {%s} %s' % (self.content, self.database, str(de).strip()))
 
                 # Append this table name to reported_table list
                 table_lock.acquire()
-                reported_tables.append("%s.%s in %s:%d gpseg%s" % (table['schema'], table['table'],
-                                                                   self.hostname, self.port, self.content))
+                reported_tables.append(
+                    "[seg%s] {%s} %s.%s in %s:%d" % (self.content, self.database, table['schema'], table['table'],
+                                                     self.hostname, self.port))
                 table_lock.release()
 
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
@@ -277,48 +314,28 @@ if __name__ == '__main__':
     setup_tool_logging(EXECNAME, getLocalHostname(), getUserName())
 
     options = parseargs()
-    logger.info("Checking integrity of database %s" % options.database)
 
     if options.verbose:
         enable_verbose_logging()
 
     try:
-        # TODO: List number of databases/schemas/tables to be checked and prompt to continue
-        dbids = get_gp_segment_configuration()  # get Greenplum segment information
-
-        tables = list()
-
-        if options.schema:
-            tables = get_tables_in_schema(options.database, options.schema)
-            logger.info("Checking only tables in schema %s" % options.schema)
-
-        if options.schema_list and type(options.schema_list) is str:
-            schemas = string.split(options.schema_list, ',')
-            for s in schemas:
-                if database_schema_exists(options.database, s):
-                    tables.extend(get_tables_in_schema(options.database, s))
-                else:
-                    logger.warn("Schema %s not found" % s)
-
-        if options.schema is None and options.schema_list is None:
-            tables = get_tables(database=options.database)  # get table list
-
-        threads = []
         reported_tables = []
         table_lock = Lock()
 
-        for dbid in dbids:
-            if dbids[dbid]['isprimary'] == 't':
-                th = CheckIntegrity(tables, dbids[dbid]['hostname'], options.database, dbids[dbid]['content'],
-                                     dbids[dbid]['port'])
-                th.start()
-                threads.append(th)
+        if options.all is not None:
+            for db in get_databases():
+                # TODO: List number of databases/schemas/tables to be checked and prompt to continue
+                logger.info("Checking database %s" % db['datname'])
+                spawn_threads(db['datname'])
+        else:
+            if options.schema is not None:
+                spawn_threads(options.database, options.schema)
+            elif options.schema_list is not None:
+                spawn_threads(options.database, options.schema_list, True)
+            else:
+                spawn_threads(options.database)
 
-        for thread in threads:
-            logger.debug('waiting on thread %s' % thread.getName())
-            thread.join()
-
-        logger.info("REPORT SUMMARY %s" % datetime.now())
+        logger.info("ERROR REPORT SUMMARY %s" % datetime.now())
         logger.info("============================================")
 
         if len(reported_tables) == 0:
@@ -334,4 +351,3 @@ if __name__ == '__main__':
         logger.error('exiting early')
 
     logger.info("completed successfully")
-
