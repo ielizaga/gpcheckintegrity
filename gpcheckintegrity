@@ -3,7 +3,7 @@
 import os
 import string
 import sys
-from threading import Thread, Lock
+from threading import Thread, Lock, BoundedSemaphore
 
 try:
     from optparse import Option, OptionParser
@@ -54,6 +54,8 @@ def print_help(option, opt, value, parser):
           "-s, --schema <schema_name> \t" \
           "    Schema name to fetch the tables from. If this option is set, gpcheckintegrity" \
           " will limit the integrity check to the tables located in this schema \n" \
+          "-B, --parallel <threads> \t"\
+          "    Number of maximum threads running at the same time. Must be a positive integer\n"
           "-d, --database <database> \t" \
           "    Name of the database to check. This option is mandatory \n" \
           "-h, -?, --help \t\t\t" \
@@ -73,6 +75,7 @@ def print_help(option, opt, value, parser):
           "Please report any bugs in https://github.com/ielizaga/gpcheckintegrity\n".format(__file__))
     parser.exit()
 
+
 def parseargs():
     # TODO: use global class to keep some variables present at all times
     parser = OptParser(option_class=OptChecker)
@@ -83,6 +86,7 @@ def parseargs():
     parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
     parser.add_option('-A', '--all', action='store_true')
     parser.add_option('-d', '--database', type='string')
+    parser.add_option('-B', '--parallel', type='string')
     (options, args) = parser.parse_args()
 
     USER = os.getenv('USER')
@@ -279,7 +283,8 @@ class CheckIntegrity(Thread):
         self.tables = tables
 
     def run(self):
-        db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
+        pool_semaphore.acquire()
+        db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
         for table in self.tables:
             try:
                 logger.info("[seg%s] {%s} Checking table %s.%s" % (
@@ -288,7 +293,7 @@ class CheckIntegrity(Thread):
                       COPY "%s"."%s"
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
-                db.query(qry)
+                db_conn.query(qry)
             except Exception, de:
                 # TODO: better error summary report
                 logger.error('[seg%s] {%s} Failed for table %s.%s' % (
@@ -303,9 +308,10 @@ class CheckIntegrity(Thread):
                 table_lock.release()
 
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
-                db.close()
-                db = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
-        db.close()
+                db_conn.close()
+                db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
+        db_conn.close()
+        pool_semaphore.release()
 
 
 #############
@@ -321,6 +327,20 @@ if __name__ == '__main__':
     try:
         reported_tables = []
         table_lock = Lock()
+
+        if options.parallel is not None:
+            try:
+                number_of_threads = int(options.parallel)
+                if number_of_threads <= 0:
+                    logger.warn("The number of parallel threads cannot be 0 or negative... Using default value")
+                    number_of_threads = 32
+            except ValueError, ve:
+                logger.warn("Not a number specified for option -B/--parallel... Skipping")
+                number_of_threads = 32
+        else:
+            number_of_threads = 32
+
+        pool_semaphore = BoundedSemaphore(value=number_of_threads)
 
         if options.all is not None:
             for db in get_databases():
