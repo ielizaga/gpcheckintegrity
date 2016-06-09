@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import string
 import sys
 from threading import Thread, Lock
 
@@ -79,7 +80,7 @@ def parseargs():
     parser.add_option('-h', '-?', '--help', action="callback", callback=print_help)
     parser.add_option('-v', '--verbose', action='store_true')
     parser.add_option('-s', '--schema', type='string')
-    # TODO: perform check just for one/multiple schemas
+    parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
     parser.add_option('-A', '--all', action='store_true')
     parser.add_option('-d', '--database', type='string')
     (options, args) = parser.parse_args()
@@ -224,13 +225,34 @@ def get_tables_in_schema(database, schema):
     return table_list
 
 
-def spawn_threads(database, schema=None):
+def database_schema_exists(database, schema):
+
+    db = connect(database=database)
+    qry = '''
+    select True as exists from pg_namespace a where a.nspname = '%s'
+    ''' % pg.escape_string(schema)
+
+    logger.debug("Running query: %s" % qry)
+
+    curs = db.query(qry)
+
+    return curs.ntuples() == 1
+
+
+def spawn_threads(database, schema=None, is_list=False):
     dbids = get_gp_segment_configuration()  # get Greenplum segment information
     tables = list()
 
-    if schema is not None:
+    if schema is not None and is_list is False:
         tables = get_tables_in_schema(database, schema)
         logger.info("Checking only tables in schema %s" % schema)
+    elif schema is not None:
+        schemas = string.split(schema, ',')
+        for s in schemas:
+            if database_schema_exists(database, s):
+                tables.extend(get_tables_in_schema(database, s))
+            else:
+                logger.warn("Schema %s not found" % s)
     else:
         tables = get_tables(database=database)  # get table list
 
@@ -308,6 +330,8 @@ if __name__ == '__main__':
         else:
             if options.schema is not None:
                 spawn_threads(options.database, options.schema)
+            elif options.schema_list is not None:
+                spawn_threads(options.database, options.schema_list, True)
             else:
                 spawn_threads(options.database)
 
