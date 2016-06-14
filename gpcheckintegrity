@@ -58,6 +58,9 @@ def print_help(option, opt, value, parser):
           "    Number of maximum threads running at the same time. Must be a positive integer\n"
           "-d, --database <database> \t" \
           "    Name of the database to check. This option is mandatory \n" \
+          "-t, --table <table> \t\t"\
+          "    Name of the table (including schema) to check. It makes gpcheckintegrity to check only <table>. "\
+          "This option has no effect if -s/-S is present \n"\
           "-h, -?, --help \t\t\t" \
           "    Prints this help page \n\n" \
           "***************************************************** \n" \
@@ -86,6 +89,7 @@ def parseargs():
     parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
     parser.add_option('-A', '--all', action='store_true')
     parser.add_option('-d', '--database', type='string')
+    parser.add_option('-t', '--table', type='string')
     parser.add_option('-B', '--parallel', type='string')
     (options, args) = parser.parse_args()
 
@@ -273,6 +277,25 @@ def spawn_threads(database, schema=None, is_list=False):
         thread.join()
 
 
+def spawn_thread(database, table):
+    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+
+    if table is None:
+        logger.error("Trying to check integrity of None")
+        raise RuntimeError(("Table to check is None",))
+
+    threads = []
+    for dbid in dbids:
+        if dbids[dbid]['isprimary'] == 't':
+            th = CheckIntegrity((table,), dbids[dbid]['hostname'], database, dbids[dbid]['content'], dbids[dbid]['port'])
+            th.start()
+            threads.append(th)
+
+    for thread in threads:
+        logger.debug('waiting on thread %s' % thread.getName())
+        thread.join()
+
+
 class CheckIntegrity(Thread):
     def __init__(self, tables, hostname, database, content, port):
         Thread.__init__(self)
@@ -352,6 +375,9 @@ if __name__ == '__main__':
                 spawn_threads(options.database, options.schema)
             elif options.schema_list is not None:
                 spawn_threads(options.database, options.schema_list, True)
+            elif options.table is not None:
+                table_cmdline_split = string.split(options.table, '.')
+                spawn_thread(options.database, {"schema": table_cmdline_split[0], "table": table_cmdline_split[1]})
             else:
                 spawn_threads(options.database)
 
