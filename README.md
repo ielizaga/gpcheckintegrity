@@ -37,9 +37,22 @@ $> ./gpcheckintegrity --help
 
 ## Usage
 
+Check integrity of database `<database>`. Options to filter by schema and to control parallelism available. 
+
 ```
-gpcheckintegrity [-v | --verbose] [-s | --schema <schema_name> ] {-d | --database} <database> | -A
+gpcheckintegrity [-v | --verbose] [-s | --schema <schema_name> ] [-B | --parallel <threads>] {-d | --database} <database>
 ```
+
+
+Check integrity in all the databases
+
+```
+gpcheckintegrity -A
+```
+
+
+Print help message
+
 ```
 gpcheckintegrity -h | -? | --help
 ```
