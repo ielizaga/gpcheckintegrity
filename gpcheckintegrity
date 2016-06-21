@@ -3,11 +3,10 @@
 import os
 import string
 import sys
+import optparse
 from threading import Thread, Lock, BoundedSemaphore
 
 try:
-    from optparse import Option, OptionParser
-    from gppylib.gpparseopts import OptParser, OptChecker
     from gppylib.gparray import GpArray
     from gppylib.gphostcache import *
     from gppylib.gplog import *
@@ -26,93 +25,47 @@ except ImportError, e:
 
 ##############
 EXECNAME = os.path.split(__file__)[-1]
-setup_tool_logging(EXECNAME, getLocalHostname(), getUserName())
-logger = get_default_logger()
-
+VERSION = '1.0'
+DEFAULT_NUM_THREADS = 32
 
 ##############
 
-def print_help(option, opt, value, parser):
-    # This function signature is mandatory as this is a callback for OptionParse
-    # even if we only use :param parser:
-    print("\nUsage: python gpcheckintegrity \n\n" \
-          "*****************************************************\n" \
-          "SYNOPSIS\n" \
-          "*****************************************************\n\n" \
-          "{0} -v [--verbose] -s [--schema] <schema_name> -d [--database] <database-name> \n" \
-          "{0} -h [-?] [--help] \n\n" \
-          "***************************************************** \n" \
-          "DESCRIPTION \n" \
-          "***************************************************** \n\n" \
-          "Utility for Greenplum Database that performs a table integrity exam to verify that all the " \
-          "tables in a specific database can be queried. \n\n" \
-          "*********************************** \n" \
-          "OPTIONS \n" \
-          "*********************************** \n\n" \
-          "-v, --verbose \t\t\t" \
-          "    Enables extra debug output. Only useful for debugging the tool itself. \n" \
-          "-s, --schema <schema_name> \t" \
-          "    Schema name to fetch the tables from. If this option is set, gpcheckintegrity" \
-          " will limit the integrity check to the tables located in this schema \n" \
-          "-B, --parallel <threads> \t"\
-          "    Number of maximum threads running at the same time. Must be a positive integer\n"
-          "-d, --database <database> \t" \
-          "    Name of the database to check. This option is mandatory \n" \
-          "-t, --table <table> \t\t"\
-          "    Name of the table (including schema) to check. It makes gpcheckintegrity to check only <table>. "\
-          "This option has no effect if -s/-S is present \n"\
-          "-h, -?, --help \t\t\t" \
-          "    Prints this help page \n\n" \
-          "***************************************************** \n" \
-          "EXAMPLES \n" \
-          "***************************************************** \n\n" \
-          "Check the integrity of all the tables in the database 'sales': \n\n" \
-          "\t {0} -d sales \n\n" \
-          "Check the integrity of all the tables in 'division_1' from DB 'sales': \n\n" \
-          "\t {0} -s division_1 -d sales \n\n" \
-          "Display this message again: \n\n" \
-          "\t {0} -h \n\n" \
-          "***************************************************** \n" \
-          "BUGS \n" \
-          "***************************************************** \n\n" \
-          "Please report any bugs in https://github.com/ielizaga/gpcheckintegrity\n".format(__file__))
-    parser.exit()
-
 
 def parseargs():
-    # TODO: use global class to keep some variables present at all times
-    parser = OptParser(option_class=OptChecker)
-    parser.remove_option('-h')
-    parser.add_option('-h', '-?', '--help', action="callback", callback=print_help)
-    parser.add_option('-v', '--verbose', action='store_true')
-    parser.add_option('-s', '--schema', type='string')
-    parser.add_option('-S', '--schema-list', type='string', dest='schema_list')
-    parser.add_option('-A', '--all', action='store_true')
-    parser.add_option('-d', '--database', type='string')
-    parser.add_option('-t', '--table', type='string')
-    parser.add_option('-B', '--parallel', type='string')
-    (options, args) = parser.parse_args()
+    parser = optparse.OptionParser(prog='gpcheckintegrity', usage="%prog [options] -d database | -A ", version=VERSION,
+                                   description='Utility for Greenplum Database that performs a table integrity exam to'
+                                               ' verify that all the tables in a specific database can be accessed.',
+                                   epilog='Source code available at github.com/ielizaga/gpcheckintegrity')
+    parser.add_option('-v', '--verbose', action='store_true', help='Enables debug logging')
+    parser.add_option('-A', '--all', action='store_true', help='Check all databases')
+    parser.add_option('-d', '--database', help='Database to connect to')
+    parser.add_option('-s', '--schema', help='Checks all the tables in this schema')
+    parser.add_option('-S', '--schema-list', dest='schema_list',
+                      help='Comma-separated list of schemas to check tables from. Example: s1,s2,s3')
+    parser.add_option('-t', '--table', help='Check just this table')
+    parser.add_option('-B', '--parallel', type=int, default=DEFAULT_NUM_THREADS, help='Number of parallel workers (Default: 32)')
+    (options_object, args_object) = parser.parse_args()
 
     USER = os.getenv('USER')
     if USER is None or USER is ' ':
         logger.error('USER environment variable must be set')
         parser.exit()
 
-    if options.database is None and options.all is None:
+    if options_object.database is None and options_object.all is None:
         logger.error('Database must be specified')
         parser.exit()
 
-    if options.database is not None and options.all is not None:
+    if options_object.database is not None and options_object.all is not None:
         logger.info('Can\'t specify -A and -d options at the same time')
         parser.exit()
 
-    if options.database is not None:
-        logger.info("Checking integrity of database %s" % options.database)
+    if options_object.database is not None:
+        logger.info("Checking integrity of database %s" % options_object.database)
 
-    if options.all is not None:
+    if options_object.all is not None:
         logger.info("Checking integrity of all databases")
 
-    return options
+    return options_object
 
 
 def connect(user=None, password=None, host=None, port=None, database=None, utilityMode=False):
@@ -201,6 +154,40 @@ def get_tables(database=None):
     return table_list
 
 
+def get_table(database, table_str):
+    logger.debug("Parsing table string: %s" % table_str)
+    table_cmdline_split = string.split(table_str, '.')
+
+    if len(table_cmdline_split) == 1:
+        schema_name = 'public'
+        table_name = table_cmdline_split[0]
+    elif len(table_cmdline_split) == 2:
+        schema_name = table_cmdline_split[0]
+        table_name = table_cmdline_split[1]
+    else:
+        logger.debug("Processing table string returned more than 2 fields")
+        return None
+
+    db_conn = connect(database=database)
+    qry = '''
+        SELECT n.nspname as schema, c.relname as table
+          FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
+        WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname != 'pg_catalog')
+        and (c.relname = '%(table_name)s') and (n.nspname = '%(schema_name)s')
+    ''' % {"table_name": pg.escape_string(table_name), "schema_name": pg.escape_string(schema_name)}
+
+    curs = db_conn.query(qry)
+
+    if curs.ntuples() == 0:
+        db_conn.close()
+        logger.warn("Table %s does not exists" % table_str)
+        return None
+    else:
+        table_dict = curs.dictresult()
+        db_conn.close()
+        return table_dict
+
+
 def get_tables_in_schema(database, schema):
     """
     This function returns a list of tables within :param schema:. If the schema is pg_catalog, it returns None and
@@ -247,53 +234,47 @@ def database_schema_exists(database, schema):
     return curs.ntuples() == 1
 
 
-def spawn_threads(database, schema=None, is_list=False):
-    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+def _spawn_threads(database):
+
     tables = list()
 
-    if schema is not None and is_list is False:
-        tables = get_tables_in_schema(database, schema)
-        logger.info("Checking only tables in schema %s" % schema)
-    elif schema is not None:
-        schemas = string.split(schema, ',')
+    if options.schema_list is not None:
+        logger.debug("Parsing schema list: %s" % options.schema_list)
+        schemas = string.split(options.schema_list, ',')
         for s in schemas:
             if database_schema_exists(database, s):
+                logger.debug("Adding schema %s to checklist" % s)
                 tables.extend(get_tables_in_schema(database, s))
             else:
                 logger.warn("Schema %s not found" % s)
-    else:
-        tables = get_tables(database=database)  # get table list
 
-    threads = []
+    if options.schema is not None:
+        tables.extend(get_tables_in_schema(database, options.schema))
+        logger.info("Checking integrity of schema %s" % options.schema)
 
-    for dbid in dbids:
-        if dbids[dbid]['isprimary'] == 't':
-            th = CheckIntegrity(tables, dbids[dbid]['hostname'], database, dbids[dbid]['content'], dbids[dbid]['port'])
-            th.start()
-            threads.append(th)
+    if options.table is not None:
+        table_dict = get_table(options.database, options.table)
 
-    for thread in threads:
-        logger.debug('waiting on thread %s' % thread.getName())
-        thread.join()
+        if table_dict is not None:
+            tables.extend(table_dict)
 
+    if options.table is None and options.schema is None and options.schema_list is None:
+        tables.extend(get_tables(database))
 
-def spawn_thread(database, table):
     dbids = get_gp_segment_configuration()  # get Greenplum segment information
-
-    if table is None:
-        logger.error("Trying to check integrity of None")
-        raise RuntimeError(("Table to check is None",))
-
     threads = []
     for dbid in dbids:
         if dbids[dbid]['isprimary'] == 't':
-            th = CheckIntegrity((table,), dbids[dbid]['hostname'], database, dbids[dbid]['content'], dbids[dbid]['port'])
+            th = CheckIntegrity(tables, dbids[dbid]['hostname'], database, dbids[dbid]['content'],
+                                dbids[dbid]['port'])
             th.start()
             threads.append(th)
 
     for thread in threads:
         logger.debug('waiting on thread %s' % thread.getName())
         thread.join()
+
+    return
 
 
 class CheckIntegrity(Thread):
@@ -351,35 +332,16 @@ if __name__ == '__main__':
         reported_tables = []
         table_lock = Lock()
 
-        if options.parallel is not None:
-            try:
-                number_of_threads = int(options.parallel)
-                if number_of_threads <= 0:
-                    logger.warn("The number of parallel threads cannot be 0 or negative... Using default value")
-                    number_of_threads = 32
-            except ValueError, ve:
-                logger.warn("Not a number specified for option -B/--parallel... Skipping")
-                number_of_threads = 32
-        else:
-            number_of_threads = 32
-
-        pool_semaphore = BoundedSemaphore(value=number_of_threads)
+        logger.debug("Maximum number of threads is %d" % options.parallel)
+        pool_semaphore = BoundedSemaphore(options.parallel)
 
         if options.all is not None:
             for db in get_databases():
                 # TODO: List number of databases/schemas/tables to be checked and prompt to continue
                 logger.info("Checking database %s" % db['datname'])
-                spawn_threads(db['datname'])
+                _spawn_threads(db['datname'])
         else:
-            if options.schema is not None:
-                spawn_threads(options.database, options.schema)
-            elif options.schema_list is not None:
-                spawn_threads(options.database, options.schema_list, True)
-            elif options.table is not None:
-                table_cmdline_split = string.split(options.table, '.')
-                spawn_thread(options.database, {"schema": table_cmdline_split[0], "table": table_cmdline_split[1]})
-            else:
-                spawn_threads(options.database)
+                _spawn_threads(options.database)
 
         logger.info("ERROR REPORT SUMMARY %s" % datetime.now())
         logger.info("============================================")
