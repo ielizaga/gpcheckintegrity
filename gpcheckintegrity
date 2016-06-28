@@ -298,7 +298,7 @@ class CheckIntegrity(Thread):
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db_conn.query(qry)
-            except Exception, de:
+            except DatabaseError, de:
                 # TODO: better error summary report
                 logger.error('[seg%s] {%s} Failed for table %s.%s' % (
                     self.content, self.database, table['schema'], table['table']))
@@ -314,7 +314,19 @@ class CheckIntegrity(Thread):
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db_conn.close()
                 db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
-        db_conn.close()
+            except Exception, unexpected_exception:
+                logger.error("[seg%s] {%s} Failed with unexpected exception: " % (self.content, self.database))
+                logger.error(unexpected_exception)
+                break
+
+        try:
+            db_conn.close()
+        except pg.InternalError, pgie:
+            logger.debug(
+                'Attempted to close an already closed connection. This probably means that a thread hit '
+                'an unexpected error')
+            logger.debug(pgie)
+
         pool_semaphore.release()
 
 
