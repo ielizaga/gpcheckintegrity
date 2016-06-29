@@ -84,20 +84,24 @@ def connect(user=None, password=None, host=None, port=None, database=None, utili
         database = os.environ.get('PGDATABASE', 'template1')
     try:
         logger.debug('connecting to %s:%s %s' % (host, port, database))
-        db = pg.connect(host=host, port=port, user=user,
+        db_conn  = pg.connect(host=host, port=port, user=user,
                         passwd=password, dbname=database, opt=conf)
     except pg.InternalError, ex:
-        logger.fatal('could not connect to %s: "%s"' %
+        logger.error('could not connect to %s: "%s"' %
                      (database, str(ex).strip()))
-        exit(1)
+        return None
 
     logger.debug('connected with %s:%s %s' % (host, port, database))
-    return db
+    return db_conn
 
 
 def get_gp_segment_configuration(database=None):
     cfg = {}
-    db = connect(database=database)
+    db_conn = connect(database=database)
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to master to get segment information. Aborting')
+        raise TypeError('Connection to db_conn cannot be None')
 
     qry = '''
           SELECT content, preferred_role = 'p' as definedprimary,
@@ -107,12 +111,12 @@ def get_gp_segment_configuration(database=None):
            WHERE fsefsoid = (select oid from pg_filespace where fsname='pg_system')
              AND (role = 'p' or content < 0 )
           '''
-    curs = db.query(qry)
+    curs = db_conn.query(qry)
     for row in curs.dictresult():
         if row['content'] == -1:
             continue  # skip master
         cfg[row['dbid']] = row
-    db.close()
+    db_conn.close()
     return cfg
 
 
@@ -121,7 +125,12 @@ def get_databases():
     This function returns the list of databases present in the Greenplum cluster.
     :return: list of databases
     """
-    db = connect(database='template1')
+    db_conn = connect(database='template1')
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to master to obtain database names. Aborting')
+        raise TypeError('Connection to db_conn cannot be None')
+
     database_list = []
 
     # Retrieve all non-catalog/non partitioned parent tables
@@ -130,15 +139,20 @@ def get_databases():
           FROM pg_database
           where datname not like 'template0'
           '''
-    curs = db.query(qry)
+    curs = db_conn.query(qry)
     for row in curs.dictresult():
         database_list.append(row)
-    db.close()
+    db_conn.close()
     return database_list
 
 
 def get_tables(database=None):
-    db = connect(database=database)
+    db_conn = connect(database=database)
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to DB %s to get table names. Aborting' % database)
+        raise TypeError('Connection to db_conn cannot be None')
+
     table_list = []
 
     # Retrieve all non-catalog/non partitioned parent tables
@@ -147,10 +161,10 @@ def get_tables(database=None):
             FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
            WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname != 'pg_catalog') and (c.relhassubclass='f')
           '''
-    curs = db.query(qry)
+    curs = db_conn.query(qry)
     for row in curs.dictresult():
         table_list.append(row)
-    db.close()
+    db_conn.close()
     return table_list
 
 
@@ -169,6 +183,11 @@ def get_table(database, table_str):
         return None
 
     db_conn = connect(database=database)
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to master to get segment information. Aborting')
+        raise TypeError('Connection to db_conn cannot be None')
+
     qry = '''
         SELECT n.nspname as schema, c.relname as table
           FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
@@ -197,7 +216,12 @@ def get_tables_in_schema(database, schema):
     :return: list of tables or None if :param schema: is 'pg_catalog'
     :raise ValueError: if schema is 'pg_catalog'
     """
-    db = connect(database=database)
+    db_conn = connect(database=database)
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to DB %s to get table names from schema %s. Aborting' % (database, schema))
+        raise TypeError('Connection to db_conn cannot be None')
+
     table_list = []
 
     if schema == "pg_catalog":
@@ -210,26 +234,31 @@ def get_tables_in_schema(database, schema):
             FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
            WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname = '%s') and (c.relhassubclass='f')
           ''' % pg.escape_string(schema)
-    curs = db.query(qry)
+    curs = db_conn.query(qry)
 
     for row in curs.dictresult():
         table_list.append(row)
 
-    db.close()
+    db_conn.close()
 
     return table_list
 
 
 def database_schema_exists(database, schema):
 
-    db = connect(database=database)
+    db_conn = connect(database=database)
+
+    if db_conn is None:
+        logger.fatal('Unable to connect to DB %s to check if schema %s exists. Aborting' % (database, schema))
+        raise TypeError('Connection to db_conn cannot be None')
+
     qry = '''
     select True as exists from pg_namespace a where a.nspname = '%s'
     ''' % pg.escape_string(schema)
 
     logger.debug("Running query: %s" % qry)
 
-    curs = db.query(qry)
+    curs = db_conn.query(qry)
 
     return curs.ntuples() == 1
 
@@ -289,6 +318,12 @@ class CheckIntegrity(Thread):
     def run(self):
         pool_semaphore.acquire()
         db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
+
+        if db_conn is None:
+            logger.debug('Thread for seg%s failed to connect to the DB... Bailing out' % self.content)
+            pool_semaphore.release()
+            return
+
         for table in self.tables:
             try:
                 logger.info("[seg%s] {%s} Checking table %s.%s" % (
@@ -314,6 +349,12 @@ class CheckIntegrity(Thread):
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db_conn.close()
                 db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
+                if db_conn is None:
+                    logger.error("Thread for seg%s found an unexpected error while trying to connect to the DB... "
+                                 "Aborting" % self.content)
+                    pool_semaphore.release()
+                    return
+
             except Exception, unexpected_exception:
                 logger.error("[seg%s] {%s} Failed with unexpected exception: " % (self.content, self.database))
                 logger.error(unexpected_exception)
