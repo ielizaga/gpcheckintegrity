@@ -324,15 +324,19 @@ class CheckIntegrity(Thread):
             pool_semaphore.release()
             return
 
+        counter = 1
+
         for table in self.tables:
             try:
-                logger.info("[seg%s] {%s} Checking table %s.%s" % (
-                    self.content, self.database, table['schema'], table['table']))
+                logger.info("[seg%s] {%s} Checking table %s.%s [%s/%s]" % (
+                    self.content, self.database, table['schema'], table['table'], counter, len(self.tables)))
                 qry = '''
                       COPY "%s"."%s"
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db_conn.query(qry)
+                counter += 1
+
             except DatabaseError, de:
                 # TODO: better error summary report
                 logger.error('[seg%s] {%s} Failed for table %s.%s' % (
