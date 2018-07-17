@@ -37,13 +37,15 @@ def parseargs():
                                                ' verify that all the tables in a specific database can be accessed.',
                                    epilog='Source code available at github.com/ielizaga/gpcheckintegrity')
     parser.add_option('-v', '--verbose', action='store_true', help='Enables debug logging')
+    parser.add_option('-y', '--yes', action='store_true', help='Assumes yes and do not prompt to confirm')
     parser.add_option('-A', '--all', action='store_true', help='Check all databases')
     parser.add_option('-d', '--database', help='Database to connect to')
     parser.add_option('-s', '--schema', help='Checks all the tables in this schema')
     parser.add_option('-S', '--schema-list', dest='schema_list',
                       help='Comma-separated list of schemas to check tables from. Example: s1,s2,s3')
     parser.add_option('-t', '--table', help='Check just this table')
-    parser.add_option('-B', '--parallel', type=int, default=DEFAULT_NUM_THREADS, help='Number of parallel workers (Default: 32)')
+    parser.add_option('-B', '--parallel', type=int, default=DEFAULT_NUM_THREADS,
+                      help='Number of parallel workers (Default: 32)')
     (options_object, args_object) = parser.parse_args()
 
     USER = os.getenv('USER')
@@ -84,8 +86,8 @@ def connect(user=None, password=None, host=None, port=None, database=None, utili
         database = os.environ.get('PGDATABASE', 'template1')
     try:
         logger.debug('connecting to %s:%s %s' % (host, port, database))
-        db_conn  = pg.connect(host=host, port=port, user=user,
-                        passwd=password, dbname=database, opt=conf)
+        db_conn = pg.connect(host=host, port=port, user=user,
+                             passwd=password, dbname=database, opt=conf)
     except pg.InternalError, ex:
         logger.error('could not connect to %s: "%s"' %
                      (database, str(ex).strip()))
@@ -290,6 +292,11 @@ def _spawn_threads(database):
     if options.table is None and options.schema is None and options.schema_list is None:
         tables.extend(get_tables(database))
 
+    if options.yes is not True \
+            and prompt_user(database, tables) is False:
+        logger.info('User cancelled the program, aborting...')
+        sys.exit(0)
+
     dbids = get_gp_segment_configuration()  # get Greenplum segment information
     threads = []
     for dbid in dbids:
@@ -304,6 +311,24 @@ def _spawn_threads(database):
         thread.join()
 
     return
+
+
+def prompt_user(database, tables):
+    logger.info('We are going to check the following. Make sure you intended to run on those tables '
+                'and nothing is missing')
+
+    for table_obj in tables:
+        logger.info('DB: %(database)s - %(schema)s.%(table)s' % {'database': database, 'schema': table_obj['schema'],
+                                                                 'table': table_obj['table']})
+    while True:
+        logger.info('\nDo you want to proceed? [Y/N]')
+        line = sys.stdin.readline()
+
+        if line[:-1] in ('Y', 'y', 'yes', 'Yes'):
+            return True
+
+        if line[:-1] in ('N', 'n', 'no', 'No'):
+            return False
 
 
 class CheckIntegrity(Thread):
@@ -398,7 +423,7 @@ if __name__ == '__main__':
                 logger.info("Checking database %s" % db['datname'])
                 _spawn_threads(db['datname'])
         else:
-                _spawn_threads(options.database)
+            _spawn_threads(options.database)
 
         logger.info("ERROR REPORT SUMMARY %s" % datetime.now())
         logger.info("============================================")
