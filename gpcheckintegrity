@@ -6,6 +6,7 @@ import sys
 import optparse
 from threading import Thread, Lock, BoundedSemaphore
 
+#TODO: Import these inside functions so that the parser help can be used at any given time
 try:
     from gppylib.gparray import GpArray
     from gppylib.gphostcache import *
@@ -21,7 +22,7 @@ try:
     from datetime import datetime
 
 except ImportError, e:
-    sys.exit('Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
+    sys.exit(str(e)+ '\nHint: Make sure that greenplum_path.sh is sourced')
 
 ##############
 EXECNAME = os.path.split(__file__)[-1]
@@ -33,41 +34,41 @@ DEFAULT_NUM_THREADS = 32
 
 def parseargs():
     parser = optparse.OptionParser(prog='gpcheckintegrity', usage="%prog [options] -d database | -A ", version=VERSION,
-                                   description='Utility for Greenplum Database that performs a table integrity exam to'
-                                               ' verify that all the tables in a specific database can be accessed.',
-                                   epilog='Source code available at github.com/ielizaga/gpcheckintegrity')
-    parser.add_option('-v', '--verbose', action='store_true', help='Enables debug logging')
+                                   description='Greenplum utility that performs an integrity check to verify'
+                                               ' that the information stored in tables can be accessed.',
+                                   epilog='Source code is available at https://github.com/ielizaga/gpcheckintegrity')
+    parser.add_option('-v', '--verbose', action='store_true', help='Enables verbose logging')
     parser.add_option('-y', '--yes', action='store_true', help='Assumes yes and do not prompt to confirm')
-    parser.add_option('-A', '--all', action='store_true', help='Check all databases')
-    parser.add_option('-d', '--database', help='Database to connect to')
-    parser.add_option('-s', '--schema', help='Checks all the tables in this schema')
+    parser.add_option('-A', '--all', action='store_true', help='Perform the integrity check in all databases and tables')
+    parser.add_option('-d', '--database', help='Target database')
+    parser.add_option('-s', '--schema', help='Target schema')
     parser.add_option('-S', '--schema-list', dest='schema_list',
-                      help='Comma-separated list of schemas to check tables from. Example: s1,s2,s3')
-    parser.add_option('-t', '--table', help='Check just this table')
+                      help='List of schemas to check, separated by commas. Example: s1,s2,s3')
+    parser.add_option('-t', '--table', help='Target table')
     parser.add_option('-B', '--parallel', type=int, default=DEFAULT_NUM_THREADS,
                       help='Number of parallel workers (Default: 32)')
-    (options_object, args_object) = parser.parse_args()
+    (options, args_object) = parser.parse_args()
 
     USER = os.getenv('USER')
     if USER is None or USER is ' ':
         logger.error('USER environment variable must be set')
         parser.exit()
 
-    if options_object.database is None and options_object.all is None:
-        logger.error('Database must be specified')
+    if options.database is None and options.all is None:
+        logger.error('A target database must be specified')
         parser.exit()
 
-    if options_object.database is not None and options_object.all is not None:
-        logger.info('Can\'t specify -A and -d options at the same time')
+    if (options.database is not None and options.all is not None) or (options.schema is not None and options.schema-list is not None):
+        logger.info('Some of the arguments are not compatible')
         parser.exit()
 
-    if options_object.database is not None:
-        logger.info("Checking integrity of database %s" % options_object.database)
+    if options.database is not None:
+        logger.info("Checking integrity of database %s" % options.database)
 
-    if options_object.all is not None:
+    if options.all is not None:
         logger.info("Checking integrity of all databases")
 
-    return options_object
+    return options
 
 
 def connect(user=None, password=None, host=None, port=None, database=None, utilityMode=False):
