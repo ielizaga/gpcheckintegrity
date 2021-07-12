@@ -107,11 +107,9 @@ def get_gp_segment_configuration(database=None):
 
     qry = '''
           SELECT content, preferred_role = 'p' as definedprimary,
-                 dbid, role = 'p' as isprimary, hostname, address, port,
-                 fselocation as datadir
-            FROM gp_segment_configuration JOIN pg_filespace_entry on (dbid = fsedbid)
-           WHERE fsefsoid = (select oid from pg_filespace where fsname='pg_system')
-             AND (role = 'p' or content < 0 )
+                 dbid, role = 'p' as isprimary, hostname, address, port
+            FROM gp_segment_configuration
+            WHERE role = 'p' or content < 0
           '''
     curs = db_conn.query(qry)
     for row in curs.dictresult():
