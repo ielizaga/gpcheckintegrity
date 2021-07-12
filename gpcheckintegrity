@@ -16,7 +16,6 @@ try:
     from gppylib.db import dbconn
     from gppylib.userinput import *
     from pygresql.pg import DatabaseError
-    from gppylib.gpcoverage import GpCoverage
     from pygresql.pgdb import DatabaseError
     from pygresql import pg
     from datetime import datetime
