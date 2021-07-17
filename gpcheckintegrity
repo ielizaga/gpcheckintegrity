@@ -157,10 +157,10 @@ def get_tables(database=None):
 
     # Retrieve all non-catalog/non partitioned parent tables
     qry = '''
-          SELECT n.nspname as schema, c.relname as table
+          SELECT %s as database, n.nspname as schema, c.relname as table
             FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
            WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname != 'pg_catalog') and (c.relhassubclass='f')
-          '''
+          ''' % pg.escape_string(database)
     curs = db_conn.query(qry)
     for row in curs.dictresult():
         table_list.append(row)
@@ -189,12 +189,12 @@ def get_table(database, table_str):
         raise TypeError('Connection to db_conn cannot be None')
 
     qry = '''
-        SELECT n.nspname as schema, c.relname as table
+        SELECT '%(database)s' as database, n.nspname as schema, c.relname as table
           FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
         WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname != 'pg_catalog')
         and (c.relname = '%(table_name)s') and (n.nspname = '%(schema_name)s')
-    ''' % {"table_name": pg.escape_string(table_name), "schema_name": pg.escape_string(schema_name)}
-
+    ''' % {"database": pg.escape_string(database), "table_name": pg.escape_string(table_name), "schema_name": pg.escape_string(schema_name)}
+    
     curs = db_conn.query(qry)
 
     if curs.ntuples() == 0:
@@ -230,10 +230,10 @@ def get_tables_in_schema(database, schema):
 
     # Retrieve all non-catalog/non partitioned parent tables
     qry = '''
-          SELECT n.nspname as schema, c.relname as table
+          SELECT %s as database, n.nspname as schema, c.relname as table
             FROM pg_class c join pg_namespace n ON (c.relnamespace = n.oid)
            WHERE (c.relkind = 'r') and (relstorage != 'x') and (n.nspname = '%s') and (c.relhassubclass='f')
-          ''' % pg.escape_string(schema)
+          ''' % (pg.escape_string(database), pg.escape_string(schema))
     curs = db_conn.query(qry)
 
     for row in curs.dictresult():
@@ -283,7 +283,6 @@ def _spawn_threads(database):
 
     if options.table is not None:
         table_dict = get_table(options.database, options.table)
-
         if table_dict is not None:
             tables.extend(table_dict)
 
