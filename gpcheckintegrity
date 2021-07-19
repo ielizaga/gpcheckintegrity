@@ -97,9 +97,9 @@ def connect(user=None, password=None, host=None, port=None, database=None, utili
     return db_conn
 
 
-def get_gp_segment_configuration(database=None):
+def get_gp_segment_configuration():
     cfg = {}
-    db_conn = connect(database=database)
+    db_conn = connect()
 
     if db_conn is None:
         logger.fatal('Unable to connect to master to get segment information. Aborting')
@@ -125,7 +125,7 @@ def get_databases():
     This function returns the list of databases present in the Greenplum cluster.
     :return: list of databases
     """
-    db_conn = connect(database='template1')
+    db_conn = connect()
 
     if db_conn is None:
         logger.fatal('Unable to connect to master to obtain database names. Aborting')
@@ -262,35 +262,44 @@ def database_schema_exists(database, schema):
 
     return curs.ntuples() == 1
 
-
-def _spawn_threads(database):
+def _spawn_threads():
 
     tables = list()
 
+    # Multiple schema scan
     if options.schema_list is not None:
         logger.debug("Parsing schema list: %s" % options.schema_list)
         schemas = string.split(options.schema_list, ',')
         for s in schemas:
-            if database_schema_exists(database, s):
+            if database_schema_exists(options.database, s):
                 logger.debug("Adding schema %s to checklist" % s)
-                tables.extend(get_tables_in_schema(database, s))
+                tables.extend(get_tables_in_schema(options.database, s))
             else:
                 logger.warn("Schema %s not found" % s)
 
+    # Single schema scan
     if options.schema is not None:
-        tables.extend(get_tables_in_schema(database, options.schema))
+        tables.extend(get_tables_in_schema(options.database, options.schema))
         logger.info("Checking integrity of schema %s" % options.schema)
-
+    
+    # Single table scan
     if options.table is not None:
         table_dict = get_table(options.database, options.table)
         if table_dict is not None:
             tables.extend(table_dict)
+    
+    # Full database scan
+    if options.all is None and options.table is None and options.schema is None and options.schema_list is None:
+        tables.extend(get_tables(options.database))
 
-    if options.table is None and options.schema is None and options.schema_list is None:
-        tables.extend(get_tables(database))
+    # All databases scan
+    if options.all is not None:
+        for db in get_databases():
+            tables.extend(get_tables(db['datname']))
 
+    # Did not pass user confirmation prompt
     if options.yes is not True \
-            and prompt_user(database, tables) is False:
+            and prompt_user(tables) is False:
         logger.info('User cancelled the program, aborting...')
         sys.exit(0)
 
@@ -298,7 +307,7 @@ def _spawn_threads(database):
     threads = []
     for dbid in dbids:
         if dbids[dbid]['isprimary'] == 't':
-            th = CheckIntegrity(tables, dbids[dbid]['hostname'], database, dbids[dbid]['content'],
+            th = CheckIntegrity(tables, dbids[dbid]['hostname'], dbids[dbid]['content'],
                                 dbids[dbid]['port'])
             th.start()
             threads.append(th)
@@ -310,11 +319,11 @@ def _spawn_threads(database):
     return
 
 
-def prompt_user(database, tables):
+def prompt_user(tables):
     logger.info('Precheck:')
 
     for table_obj in tables:
-        logger.info('DB: %(database)s - %(schema)s.%(table)s' % {'database': database, 'schema': table_obj['schema'],
+        logger.info('%(database)s - %(schema)s.%(table)s' % {'database': table_obj['database'], 'schema': table_obj['schema'],
                                                                  'table': table_obj['table']})
     while True:
         logger.info('\nDo you want to proceed? [Y/N]')
@@ -328,52 +337,51 @@ def prompt_user(database, tables):
 
 
 class CheckIntegrity(Thread):
-    def __init__(self, tables, hostname, database, content, port):
+    def __init__(self, tables, hostname, content, port):
         Thread.__init__(self)
         self.hostname = hostname
-        self.database = database
         self.port = port
         self.content = content
         self.tables = tables
 
     def run(self):
         pool_semaphore.acquire()
-        db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
-
-        if db_conn is None:
-            logger.debug('Thread for seg%s failed to connect to the DB... Bailing out' % self.content)
-            pool_semaphore.release()
-            return
-
         counter = 1
 
         for table in self.tables:
+            database = table['database']
             try:
+                db_conn = connect(database=database, host=self.hostname, port=self.port, utilityMode=True)
+                if db_conn is None:
+                    logger.debug('Thread for seg%s failed to connect to the database %s. Exiting.' % (self.content,database))
+                    pool_semaphore.release()
+                    return
                 logger.info("[seg%s] {%s} Checking table %s.%s [%s/%s]" % (
-                    self.content, self.database, table['schema'], table['table'], counter, len(self.tables)))
+                    self.content, database, table['schema'], table['table'], counter, len(self.tables)))
                 qry = '''
                       COPY "%s"."%s"
                       TO '/dev/null'
                       ''' % (table['schema'], table['table'])
                 db_conn.query(qry)
                 counter += 1
+                db_conn.close()
 
             except DatabaseError, de:
                 # TODO: better error summary report
                 logger.error('[seg%s] {%s} Failed for table %s.%s' % (
-                    self.content, self.database, table['schema'], table['table']))
-                logger.debug('[seg%s] {%s} %s' % (self.content, self.database, str(de).strip()))
+                    self.content, database, table['schema'], table['table']))
+                logger.debug('[seg%s] {%s} %s' % (self.content, database, str(de).strip()))
 
                 # Append this table name to reported_table list
                 table_lock.acquire()
                 reported_tables.append(
-                    "[seg%s] {%s} %s.%s in %s:%d" % (self.content, self.database, table['schema'], table['table'],
+                    "[seg%s] {%s} %s.%s in %s:%d" % (self.content, database, table['schema'], table['table'],
                                                      self.hostname, self.port))
                 table_lock.release()
 
                 # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db_conn.close()
-                db_conn = connect(database=self.database, host=self.hostname, port=self.port, utilityMode=True)
+                db_conn = connect(database=database, host=self.hostname, port=self.port, utilityMode=True)
                 if db_conn is None:
                     logger.error("Thread for seg%s found an unexpected error while trying to connect to the DB... "
                                  "Aborting" % self.content)
@@ -381,7 +389,7 @@ class CheckIntegrity(Thread):
                     return
 
             except Exception, unexpected_exception:
-                logger.error("[seg%s] {%s} Failed with unexpected exception: " % (self.content, self.database))
+                logger.error("[seg%s] {%s} Failed with unexpected exception: " % (self.content, database))
                 logger.error(unexpected_exception)
                 break
 
@@ -412,14 +420,7 @@ if __name__ == '__main__':
 
         logger.debug("Maximum number of threads is %d" % options.parallel)
         pool_semaphore = BoundedSemaphore(options.parallel)
-
-        if options.all is not None:
-            for db in get_databases():
-                # TODO: List number of databases/schemas/tables to be checked and prompt to continue
-                logger.info("Checking database %s" % db['datname'])
-                _spawn_threads(db['datname'])
-        else:
-            _spawn_threads(options.database)
+        _spawn_threads()
 
         logger.info("ERROR REPORT SUMMARY %s" % datetime.now())
         logger.info("============================================")
