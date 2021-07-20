@@ -389,17 +389,9 @@ class CheckIntegrity(Thread):
                     return
 
             except Exception, unexpected_exception:
-                logger.error("[seg%s] {%s} Failed with unexpected exception: " % (self.content, database))
+                logger.error("[seg%s] {%s} Failed with exception: " % (self.content, database))
                 logger.error(unexpected_exception)
                 break
-
-        try:
-            db_conn.close()
-        except pg.InternalError, pgie:
-            logger.debug(
-                'Attempted to close an already closed connection. This probably means that a thread hit '
-                'an unexpected error')
-            logger.debug(pgie)
 
         pool_semaphore.release()
 
