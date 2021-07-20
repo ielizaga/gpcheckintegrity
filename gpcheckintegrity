@@ -21,7 +21,7 @@ try:
     from datetime import datetime
 
 except ImportError, e:
-    sys.exit(str(e)+ '\nHint: Make sure that greenplum_path.sh is sourced')
+    sys.exit('Could not import Greenplum python library: %s\nHint: source /usr/local/greenplum-db/greenplum_path.sh' % str(e))
 
 ##############
 EXECNAME = os.path.split(__file__)[-1]
@@ -199,7 +199,7 @@ def get_table(database, table_str):
 
     if curs.ntuples() == 0:
         db_conn.close()
-        logger.warn("Table %s does not exists" % table_str)
+        logger.warn("Table %s does not exist" % table_str)
         return None
     else:
         table_dict = curs.dictresult()
@@ -259,8 +259,11 @@ def database_schema_exists(database, schema):
     logger.debug("Running query: %s" % qry)
 
     curs = db_conn.query(qry)
+    exists = curs.ntuples() == 1
 
-    return curs.ntuples() == 1
+    db_conn.close()
+
+    return exists
 
 def _spawn_threads():
 
