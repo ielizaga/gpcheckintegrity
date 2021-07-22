@@ -370,7 +370,6 @@ class CheckIntegrity(Thread):
                 db_conn.close()
 
             except DatabaseError, de:
-                # TODO: better error summary report
                 logger.error('[seg%s] {%s} Failed for table %s.%s' % (
                     self.content, database, table['schema'], table['table']))
                 logger.debug('[seg%s] {%s} %s' % (self.content, database, str(de).strip()))
@@ -381,15 +380,7 @@ class CheckIntegrity(Thread):
                     "[seg%s] {%s} %s.%s in %s:%d" % (self.content, database, table['schema'], table['table'],
                                                      self.hostname, self.port))
                 table_lock.release()
-
-                # TODO: pygresql wraps all queries in the same cursor under the same transaction
                 db_conn.close()
-                db_conn = connect(database=database, host=self.hostname, port=self.port, utilityMode=True)
-                if db_conn is None:
-                    logger.error("Thread for seg%s found an unexpected error while trying to connect to the DB... "
-                                 "Aborting" % self.content)
-                    pool_semaphore.release()
-                    return
 
             except Exception, unexpected_exception:
                 logger.error("[seg%s] {%s} Failed with exception: " % (self.content, database))
