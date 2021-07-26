@@ -4,6 +4,7 @@ import os
 import string
 import sys
 import optparse
+import signal
 from threading import Thread, Lock, BoundedSemaphore
 
 #TODO: Import these inside functions so that the parser help can be used at any given time
@@ -306,7 +307,7 @@ def _spawn_threads():
         logger.info('User cancelled the program, aborting...')
         sys.exit(0)
 
-    dbids = get_gp_segment_configuration()  # get Greenplum segment information
+    dbids = get_gp_segment_configuration()
     threads = []
     for dbid in dbids:
         if dbids[dbid]['isprimary'] == 't':
@@ -324,7 +325,6 @@ def _spawn_threads():
 
 def prompt_user(tables):
     logger.info('Precheck:')
-
     for table_obj in tables:
         logger.info('%(database)s - %(schema)s.%(table)s' % {'database': table_obj['database'], 'schema': table_obj['schema'],
                                                                  'table': table_obj['table']})
@@ -332,11 +332,8 @@ def prompt_user(tables):
         logger.info('\nDo you want to proceed? [Y/N]')
         line = sys.stdin.readline()
 
-        if line[:-1] in ('Y', 'y', 'yes', 'Yes'):
-            return True
-
-        if line[:-1] in ('N', 'n', 'no', 'No'):
-            return False
+        return True if line[:-1] in ('Y', 'y', 'yes', 'Yes')
+        return False
 
 
 class CheckIntegrity(Thread):
@@ -346,12 +343,22 @@ class CheckIntegrity(Thread):
         self.port = port
         self.content = content
         self.tables = tables
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    def stopped(self):
+        return self._stop.isSet()
 
     def run(self):
         pool_semaphore.acquire()
         counter = 1
 
         for table in self.tables:
+            if self.stopped():
+                break
+
             database = table['database']
             try:
                 db_conn = connect(database=database, host=self.hostname, port=self.port, utilityMode=True)
@@ -362,11 +369,10 @@ class CheckIntegrity(Thread):
                 logger.info("[seg%s] {%s} Checking table %s.%s [%s/%s]" % (
                     self.content, database, table['schema'], table['table'], counter, len(self.tables)))
                 qry = '''
-                      COPY "%s"."%s"
-                      TO '/dev/null'
-                      ''' % (table['schema'], table['table'])
-                db_conn.query(qry)
+                    COPY "%s"."%s" TO '/dev/null'
+                    ''' % (table['schema'], table['table'])
                 counter += 1
+                db_conn.query(qry)
                 db_conn.close()
 
             except DatabaseError, de:
@@ -374,20 +380,22 @@ class CheckIntegrity(Thread):
                     self.content, database, table['schema'], table['table']))
                 logger.debug('[seg%s] {%s} %s' % (self.content, database, str(de).strip()))
 
-                # Append this table name to reported_table list
+                # Report table
                 table_lock.acquire()
                 reported_tables.append(
                     "[seg%s] {%s} %s.%s in %s:%d" % (self.content, database, table['schema'], table['table'],
-                                                     self.hostname, self.port))
+                                                       self.hostname, self.port))
                 table_lock.release()
                 db_conn.close()
 
             except Exception, unexpected_exception:
+                db_conn.close()
                 logger.error("[seg%s] {%s} Failed with exception: " % (self.content, database))
                 logger.error(unexpected_exception)
                 break
-
+             
         pool_semaphore.release()
+        return
 
 
 #############
